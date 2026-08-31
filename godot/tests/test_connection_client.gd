@@ -18,9 +18,17 @@ func _init() -> void:
 	assert(Client.retry_decision(2) == {"status": "retrying", "delay_seconds": 4.0})
 	assert(Client.retry_decision(3) == {"status": "offline", "delay_seconds": 0.0})
 	assert(Client.retry_decision(99).status == "offline")
+	var passed_report := Client.connection_test_report({
+		"/servers/activity": {"ok": true},
+		"/servers/resources": {"ok": true},
+	})
+	assert(passed_report.ok)
+	assert(not passed_report.started)
+	assert(not Client.connection_test_report({"/servers/activity": {"ok": true}}).ok)
 
 	var client := Client.new()
 	assert(client.connection_status() == "setup")
+	assert(not client.test_connection().started)
 	var bad_origin := client.connect_live("https://example.com", fixture_token)
 	assert(not bad_origin.ok)
 	assert(not str(bad_origin.error).contains(fixture_token))

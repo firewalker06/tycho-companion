@@ -8,11 +8,13 @@ const CONTROL_MARGIN := 0
 const CONTROL_HEIGHT := 34
 const SETTINGS_HEIGHT := 228
 const INSPECT_HEIGHT := 278
+const DEBUG_HEIGHT := 278
 
 static func overlay_height(kind: String) -> int:
 	match kind:
 		"settings": return SETTINGS_HEIGHT
 		"inspect": return INSPECT_HEIGHT
+		"debug": return DEBUG_HEIGHT
 		_: return 0
 
 static func window_height(kind: String) -> int:

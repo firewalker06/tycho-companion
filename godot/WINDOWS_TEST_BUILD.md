@@ -2,7 +2,7 @@
 
 Extract the attached ZIP, then run `TychoCompanion.exe`.
 
-This is a portable x86_64 test build using the Godot 4.7.2 Windows runtime. It starts as an empty shoreline. Use **Settings** to enter a safe Tycho origin and a bearer token; the token remains in memory and only read-only activity/resources requests are made. **Inspect** shows connection diagnostics and mapped agent states; **Quit** exits cleanly.
+This is a portable x86_64 test build using the Godot 4.7.2 Windows runtime. It starts as an empty shoreline. Use **Settings** to enter a safe Tycho origin and a bearer token; the token remains in memory and only read-only activity/resources requests are made. **Inspect** shows connection diagnostics and mapped agent states. **Debug** can probe both endpoints, preview a deterministic nine-state render fixture, and save a clean PNG under the Godot application-data directory. **Quit** exits cleanly.
 
 On transparent Windows builds, only the compact controls and an open overlay receive pointer input. Godot's explicit concave L-shaped mouse-passthrough polygon forwards clicks over all other ambient scene pixels to the desktop.
 

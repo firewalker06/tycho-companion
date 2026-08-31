@@ -6,6 +6,7 @@ func _init() -> void:
 	assert(Layout.window_height("") == 160)
 	assert(Layout.window_height("settings") == 388)
 	assert(Layout.window_height("inspect") == 438)
+	assert(Layout.window_height("debug") == 438)
 	var usable := Rect2i(20, 30, 1920, 1040)
 	var compact_position := Layout.bottom_anchored_position(usable, Layout.window_height(""))
 	var settings_position := Layout.bottom_anchored_position(usable, Layout.window_height("settings"))
@@ -32,5 +33,10 @@ func _init() -> void:
 		inspect.position, Vector2(inspect.end.x, inspect.position.y), Vector2(control.end.x, control.end.y),
 		Vector2(control.position.x, control.end.y), control.position, Vector2(inspect.position.x, strip_top),
 	]))
+	var debug := Layout.overlay_rect(1280.0, "debug")
+	var debug_control := Layout.control_rect(1280.0, "debug", 350.0)
+	assert(debug.end.y == Layout.strip_top("debug"))
+	assert(debug_control.position.y >= Layout.strip_top("debug"))
+	assert(Layout.input_polygon(1280.0, "debug", 350.0).size() == 6)
 	print("Desktop layout tests passed")
 	quit(0)

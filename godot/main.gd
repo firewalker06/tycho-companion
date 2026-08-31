@@ -2,6 +2,7 @@ extends Node2D
 
 const StateMapperScript := preload("res://state_mapper.gd")
 const DesktopLayoutScript := preload("res://desktop_layout.gd")
+const DebugSystemScript := preload("res://debug_system.gd")
 const WORKSHOP := preload("res://assets/coastal-workshop.png")
 const CARETAKER := preload("res://assets/caretaker-poses.png")
 
@@ -9,9 +10,9 @@ const CARETAKER := preload("res://assets/caretaker-poses.png")
 # work bays. It is intentionally fitted to the compact strip, with no bars.
 const WORKSHOP_REGION := Rect2(0, 400, 1774, 384)
 const CARETAKER_CELL := Vector2(512, 512)
-const CONTROL_WIDTH := 274.0
+const CONTROL_WIDTH := 350.0
 
-@onready var client: ConnectionClient = $ConnectionClient
+@onready var client: Node = $ConnectionClient
 
 var tide := 0.0
 var agents: Array[Dictionary] = []
@@ -20,11 +21,19 @@ var overlay_kind := ""
 var control_area: PanelContainer
 var settings_panel: PanelContainer
 var inspect_panel: PanelContainer
+var debug_panel: PanelContainer
 var origin_field: LineEdit
 var token_field: LineEdit
 var settings_state: Label
 var connection_label: Label
 var inspect_text: Label
+var debug_text: Label
+var render_test_button: Button
+var debug_render_active := false
+var debug_agents: Array[Dictionary] = []
+var snapshot_busy := false
+var last_snapshot_path := ""
+var last_snapshot_error := OK
 
 func _ready() -> void:
 	get_window().transparent = true
@@ -34,10 +43,13 @@ func _ready() -> void:
 	_build_controls()
 	client.status_changed.connect(_on_connection_status_changed)
 	client.snapshot_received.connect(_on_snapshot_received)
+	client.connection_test_completed.connect(_on_connection_test_completed)
 	_on_connection_status_changed(client.connection_status(), client.connection_message())
 	get_viewport().size_changed.connect(_on_viewport_size_changed)
 	call_deferred("_update_passthrough")
 	queue_redraw()
+	if OS.get_cmdline_user_args().has("--debug-render-snapshot"):
+		call_deferred("_run_cli_render_snapshot")
 
 func _process(delta: float) -> void:
 	if _has_motion():
@@ -104,7 +116,7 @@ func _build_controls() -> void:
 	connection_label.clip_text = true
 	connection_label.add_theme_color_override("font_color", Color("a9ddd2"))
 	row.add_child(connection_label)
-	for details in [["Settings", "Configure Tycho origin and token"], ["Inspect", "Show compact diagnostics"], ["Quit", "Quit Tycho Companion"]]:
+	for details in [["Settings", "Configure Tycho origin and token"], ["Inspect", "Show compact diagnostics"], ["Debug", "Test connection and rendering"], ["Quit", "Quit Tycho Companion"]]:
 		var button := Button.new()
 		button.text = details[0]
 		button.tooltip_text = details[1]
@@ -112,10 +124,12 @@ func _build_controls() -> void:
 		match button.text:
 			"Settings": button.pressed.connect(_toggle_overlay.bind("settings"))
 			"Inspect": button.pressed.connect(_toggle_overlay.bind("inspect"))
+			"Debug": button.pressed.connect(_toggle_overlay.bind("debug"))
 			"Quit": button.pressed.connect(_quit)
 		row.add_child(button)
 	_build_settings(layer)
 	_build_inspect(layer)
+	_build_debug(layer)
 	_layout_controls()
 
 func _layout_controls() -> void:
@@ -127,6 +141,8 @@ func _layout_controls() -> void:
 	settings_panel.size = DesktopLayoutScript.overlay_rect(width, "settings").size
 	inspect_panel.position = DesktopLayoutScript.overlay_rect(width, "inspect").position
 	inspect_panel.size = DesktopLayoutScript.overlay_rect(width, "inspect").size
+	debug_panel.position = DesktopLayoutScript.overlay_rect(width, "debug").position
+	debug_panel.size = DesktopLayoutScript.overlay_rect(width, "debug").size
 
 func _build_settings(layer: CanvasLayer) -> void:
 	settings_panel = PanelContainer.new()
@@ -185,8 +201,43 @@ func _build_inspect(layer: CanvasLayer) -> void:
 	inspect_panel.add_child(inspect_text)
 	inspect_panel.hide()
 
+func _build_debug(layer: CanvasLayer) -> void:
+	debug_panel = PanelContainer.new()
+	debug_panel.name = "DebugOverlay"
+	debug_panel.add_theme_stylebox_override("panel", _panel_style(Color("0b2940fa")))
+	layer.add_child(debug_panel)
+	var box := VBoxContainer.new()
+	box.add_theme_constant_override("separation", 8)
+	debug_panel.add_child(box)
+	var title := Label.new()
+	title.text = "Tycho debug tools"
+	title.add_theme_font_size_override("font_size", 16)
+	title.add_theme_color_override("font_color", Color("f4dc9b"))
+	box.add_child(title)
+	debug_text = Label.new()
+	debug_text.text = "Run explicit checks without changing live polling or saving credentials."
+	debug_text.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	debug_text.add_theme_color_override("font_color", Color("d6eee8"))
+	box.add_child(debug_text)
+	var actions := VBoxContainer.new()
+	actions.add_theme_constant_override("separation", 5)
+	box.add_child(actions)
+	for details in [["Test connection", "Probe activity and resources without changing the live scene"], ["Test rendering", "Validate image regions and preview every lifecycle state"], ["Snapshot rendering", "Save a clean compact PNG under user data"]]:
+		var button := Button.new()
+		button.text = details[0]
+		button.tooltip_text = details[1]
+		_style_button(button)
+		match button.text:
+			"Test connection": button.pressed.connect(_test_connection)
+			"Test rendering":
+				render_test_button = button
+				button.pressed.connect(_test_rendering)
+			"Snapshot rendering": button.pressed.connect(_snapshot_rendering)
+		actions.add_child(button)
+	debug_panel.hide()
+
 func _connect() -> void:
-	var result := client.connect_live(origin_field.text, token_field.text)
+	var result: Dictionary = client.connect_live(origin_field.text, token_field.text)
 	if not result.ok:
 		settings_state.text = str(result.error)
 		return
@@ -204,6 +255,7 @@ func _toggle_overlay(kind: String) -> void:
 	overlay_kind = "" if overlay_kind == kind else kind
 	settings_panel.visible = overlay_kind == "settings"
 	inspect_panel.visible = overlay_kind == "inspect"
+	debug_panel.visible = overlay_kind == "debug"
 	if overlay_kind == "settings": settings_state.text = client.connection_message()
 	if overlay_kind == "inspect": _update_inspect_text()
 	_apply_window_layout()
@@ -215,6 +267,7 @@ func _hide_overlays() -> void:
 	overlay_kind = ""
 	settings_panel.hide()
 	inspect_panel.hide()
+	debug_panel.hide()
 	_apply_window_layout()
 	call_deferred("_layout_controls")
 	call_deferred("_update_passthrough")
@@ -242,6 +295,86 @@ func _on_snapshot_received(activity: Dictionary, _resources: Dictionary, refresh
 	_update_inspect_text()
 	queue_redraw()
 
+func _test_connection() -> void:
+	debug_text.text = "Testing connection…"
+	var result: Dictionary = client.test_connection()
+	if not result.started:
+		debug_text.text = result.message
+
+func _on_connection_test_completed(report: Dictionary) -> void:
+	var lines := [str(report.message)]
+	var endpoints: Dictionary = report.get("endpoints", {})
+	for path in ["/servers/activity", "/servers/resources"]:
+		if endpoints.has(path):
+			var result: Dictionary = endpoints[path]
+			lines.append("%s — %s · HTTP %d · %d ms" % [path, "pass" if result.ok else "fail", result.status_code, result.duration_ms])
+	debug_text.text = "\n".join(lines)
+
+func _test_rendering() -> void:
+	if debug_render_active:
+		debug_render_active = false
+		debug_agents.clear()
+		render_test_button.text = "Test rendering"
+		debug_text.text = "Synthetic render preview stopped; live rendering restored."
+		queue_redraw()
+		return
+	var report := DebugSystemScript.render_test_report(WORKSHOP.get_size(), CARETAKER.get_size(), WORKSHOP_REGION, Vector2i(CARETAKER_CELL))
+	debug_render_active = report.ok
+	debug_agents = DebugSystemScript.render_fixture() if report.ok else []
+	if report.ok:
+		render_test_button.text = "Return to live rendering"
+	debug_text.text = "%s\nPreview: %s" % [report.message, ", ".join(report.states)]
+	queue_redraw()
+
+func _snapshot_rendering() -> void:
+	if snapshot_busy:
+		return
+	snapshot_busy = true
+	debug_text.text = "Capturing a clean compact frame…"
+	_hide_overlays()
+	control_area.hide()
+	queue_redraw()
+	await get_tree().process_frame
+	# Flush synchronously so capture does not depend on a desktop compositor or
+	# frame_post_draw timing. A truly headless dummy renderer has no texture; the
+	# explicit null check below reports that as unsupported instead of hanging.
+	RenderingServer.force_draw(false, 0.0)
+	var image: Image = null
+	if DisplayServer.get_name() != "headless":
+		var texture := get_viewport().get_texture()
+		image = texture.get_image() if texture != null else null
+	var directory := "user://snapshots"
+	var absolute_directory := ProjectSettings.globalize_path(directory)
+	var timestamp := "%s-%03d" % [Time.get_datetime_string_from_system(), Time.get_ticks_msec() % 1000]
+	var relative_path := "%s/%s" % [directory, DebugSystemScript.snapshot_filename(timestamp)]
+	var save_error := ERR_UNAVAILABLE
+	if image != null and not image.is_empty():
+		var directory_error := DirAccess.make_dir_recursive_absolute(absolute_directory)
+		save_error = directory_error if directory_error != OK else image.save_png(relative_path)
+	last_snapshot_path = ProjectSettings.globalize_path(relative_path) if save_error == OK else ""
+	last_snapshot_error = save_error
+	control_area.show()
+	overlay_kind = "debug"
+	debug_panel.show()
+	_apply_window_layout()
+	call_deferred("_layout_controls")
+	call_deferred("_update_passthrough")
+	debug_text.text = "Snapshot saved: %s" % last_snapshot_path if save_error == OK else "Snapshot failed with error %d." % save_error
+	snapshot_busy = false
+
+func _run_cli_render_snapshot() -> void:
+	## Deterministic smoke path for local diagnostics. It uses only the
+	## synthetic render fixture and never loads a Tycho origin or token.
+	_test_rendering()
+	await get_tree().process_frame
+	await _snapshot_rendering()
+	if last_snapshot_error == OK:
+		print("Debug render snapshot saved: %s" % last_snapshot_path)
+		get_tree().quit(0)
+	else:
+		printerr("Debug render snapshot failed with error %d." % last_snapshot_error)
+		get_tree().quit(1)
+
 func _update_inspect_text() -> void:
 	if inspect_text == null: return
 	var lines := ["Tycho Inspector", "Connection: %s" % client.connection_status(), "Status: %s" % client.connection_message(), "Last refresh: %s" % last_refresh]
@@ -253,6 +386,8 @@ func _update_inspect_text() -> void:
 	inspect_text.text = "\n".join(lines)
 
 func _has_motion() -> bool:
+	if debug_render_active:
+		return false
 	for agent in agents:
 		if StateMapperScript.effective_state(agent) == "running" and not agent.stale: return true
 	return false
@@ -265,10 +400,11 @@ func _draw() -> void:
 	var viewport := get_viewport_rect()
 	var strip := DesktopLayoutScript.strip_rect(viewport.size.x, overlay_kind)
 	draw_texture_rect_region(WORKSHOP, strip, WORKSHOP_REGION)
-	if agents.is_empty(): return
-	var gap := viewport.size.x / float(agents.size() + 1)
-	for index in agents.size():
-		_draw_caretaker(Vector2(gap * float(index + 1), strip.position.y + 126.0), agents[index])
+	var visible_agents := debug_agents if debug_render_active else agents
+	if visible_agents.is_empty(): return
+	var gap := viewport.size.x / float(visible_agents.size() + 1)
+	for index in visible_agents.size():
+		_draw_caretaker(Vector2(gap * float(index + 1), strip.position.y + 126.0), visible_agents[index])
 
 func _draw_caretaker(position: Vector2, agent: Dictionary) -> void:
 	var state := StateMapperScript.effective_state(agent)
