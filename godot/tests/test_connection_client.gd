@@ -13,6 +13,12 @@ func _init() -> void:
 	assert(Client.redact_secret("request failed: " + fixture_token, fixture_token) == "request failed: [redacted]")
 	assert(Client.redact_secret("safe", fixture_token) == "safe")
 
+	assert(Client.MAX_RETRIES == 3)
+	assert(Client.retry_decision(1) == {"status": "retrying", "delay_seconds": 2.0})
+	assert(Client.retry_decision(2) == {"status": "retrying", "delay_seconds": 4.0})
+	assert(Client.retry_decision(3) == {"status": "offline", "delay_seconds": 0.0})
+	assert(Client.retry_decision(99).status == "offline")
+
 	var client := Client.new()
 	assert(client.connection_status() == "setup")
 	var bad_origin := client.connect_live("https://example.com", fixture_token)
@@ -23,7 +29,7 @@ func _init() -> void:
 	assert(client.connection_status() == "setup")
 	client.disconnect_live()
 	assert(client.connection_status() == "setup")
-	for attempt in 3:
+	for attempt in 2:
 		client._connection_failed("test failure")
 		assert(client.connection_status() == "retrying", "attempt %d should retry" % (attempt + 1))
 	client._connection_failed("test failure")

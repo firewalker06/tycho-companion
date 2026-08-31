@@ -123,12 +123,20 @@ func _connection_failed(reason: String) -> void:
 	_generation += 1
 	_pending = 0
 	_retry_count += 1
-	if _retry_count <= MAX_RETRIES:
-		var delay := minf(MAX_BACKOFF_SECONDS, BASE_BACKOFF_SECONDS * pow(2.0, _retry_count - 1))
-		_next_refresh_at = Time.get_ticks_msec() + int(delay * 1000.0)
-		_set_status("retrying", "%s Retrying in %d seconds." % [reason, int(delay)])
-	else:
+	var decision := retry_decision(_retry_count)
+	if decision.status == "offline":
 		_set_status("offline", "%s Reconnect from Settings." % reason)
+		return
+	_next_refresh_at = Time.get_ticks_msec() + int(decision.delay_seconds * 1000.0)
+	_set_status("retrying", "%s Retrying in %d seconds." % [reason, int(decision.delay_seconds)])
+
+static func retry_decision(attempt: int) -> Dictionary:
+	## Attempts are one-based failed refreshes. The third failure is terminal;
+	## reconnect_live is the only path that resets the retry budget.
+	if attempt >= MAX_RETRIES:
+		return {"status": "offline", "delay_seconds": 0.0}
+	var delay := minf(MAX_BACKOFF_SECONDS, BASE_BACKOFF_SECONDS * pow(2.0, maxf(0.0, attempt - 1)))
+	return {"status": "retrying", "delay_seconds": delay}
 
 func _set_status(next_status: String, next_message: String) -> void:
 	_status = next_status

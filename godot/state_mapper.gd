@@ -63,7 +63,7 @@ static func effective_state(agent: Dictionary) -> String:
 	return agent.state
 
 static func caretaker_pose_cell(state: String, stale: bool) -> Vector2i:
-	if stale or state == "stopped":
+	if stale or state in ["stopped", "offline", "stale"]:
 		return Vector2i(2, 1)
 	match state:
 		"idle": return Vector2i(0, 0)

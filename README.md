@@ -14,7 +14,7 @@ cd dist/windows-x86_64 && zip -q ../TychoCompanion-windows-x86_64.zip TychoCompa
 
 The tracked project starts as an empty shoreline and needs no server or credentials. Open **Settings** in the strip to connect a loopback, single-label MagicDNS, or `.ts.net` HTTPS Tycho origin. The bearer token stays in memory only; only the validated origin may be saved under `user://`. `TYCHO_ORIGIN` and `TYCHO_TOKEN` can provide an initial live connection without being logged. The client issues only authenticated `GET /servers/activity` and `GET /servers/resources` requests.
 
-When a configured connection fails, the strip reports the real retrying state and preserves only the last live scene as stale; it never substitutes demo activity. Disconnect clears the token and returns to the empty shoreline. Three retries back off from 2 seconds to 8 seconds, then the client enters explicit offline state until manually reconnected. Stale request completions are discarded after a reconnect or disconnect.
+When a configured connection fails, the strip reports the real retrying state and preserves only the last live scene as stale; it never substitutes demo activity. Disconnect clears the token and returns to the empty shoreline. Failed attempts back off exponentially from 2 seconds with a cap; after attempt 3 the client enters explicit offline state until manually reconnected. Stale request completions are discarded after a reconnect or disconnect.
 
 The Windows attachment is an unsigned x86_64 test build. Extract it and run `TychoCompanion.exe`; Windows may show a SmartScreen warning because this is not a signed release.
 
@@ -29,3 +29,7 @@ The Windows attachment is an unsigned x86_64 test build. Extract it and run `Tyc
 See [the research report](docs/research/desktop-diorama-visualizer.md) for the architecture rationale. This is not an App Store-ready release or a complete MVP.
 
 Asset provenance and exact source dimensions, crop, atlas layout, and hashes are in [godot/assets/README.md](godot/assets/README.md).
+
+## Verification
+
+Verified with a normal runtime launch, source and caretaker-atlas visual inspection, and deterministic mapper, connection, and desktop-layout tests. Compact and overlay screenshots are not claimed: headless MovieMaker crashed in this host's dummy texture driver, and GUI capture showed the covering desktop window.

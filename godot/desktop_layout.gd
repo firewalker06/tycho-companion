@@ -6,9 +6,8 @@ extends RefCounted
 const STRIP_HEIGHT := 160
 const CONTROL_MARGIN := 0
 const CONTROL_HEIGHT := 34
-const OVERLAY_GAP := 8
-const SETTINGS_HEIGHT := 220
-const INSPECT_HEIGHT := 270
+const SETTINGS_HEIGHT := 228
+const INSPECT_HEIGHT := 278
 
 static func overlay_height(kind: String) -> int:
 	match kind:
@@ -17,9 +16,9 @@ static func overlay_height(kind: String) -> int:
 		_: return 0
 
 static func window_height(kind: String) -> int:
-	if kind.is_empty():
-		return STRIP_HEIGHT
-	return overlay_height(kind) + OVERLAY_GAP + STRIP_HEIGHT
+	# Expanded windows contain the complete overlay space plus the complete,
+	# bottom-most ambient strip. There is no shared or clipped row between them.
+	return overlay_height(kind) + STRIP_HEIGHT
 
 static func strip_top(kind: String) -> float:
 	return float(window_height(kind) - STRIP_HEIGHT)
@@ -29,9 +28,7 @@ static func bottom_anchored_position(usable: Rect2i, height: int) -> Vector2i:
 
 static func overlay_rect(viewport_width: float, kind: String) -> Rect2:
 	var width := minf(394.0, maxf(260.0, viewport_width - 16.0))
-	# The final eight pixels are panel breathing room above the strip; the panel
-	# itself meets the strip so its connected control shelf has an exact L hit area.
-	return Rect2(viewport_width - width - 8.0, 0.0, width, overlay_height(kind) + OVERLAY_GAP)
+	return Rect2(viewport_width - width - 8.0, 0.0, width, overlay_height(kind))
 
 static func control_rect(viewport_width: float, kind: String, width: float) -> Rect2:
 	return Rect2(viewport_width - width - 8.0, strip_top(kind) + CONTROL_MARGIN, width, CONTROL_HEIGHT)
@@ -39,7 +36,7 @@ static func control_rect(viewport_width: float, kind: String, width: float) -> R
 static func strip_rect(viewport_width: float, kind: String) -> Rect2:
 	return Rect2(0.0, strip_top(kind), viewport_width, STRIP_HEIGHT)
 
-static func passthrough_polygon(viewport_width: float, kind: String, control_width: float) -> PackedVector2Array:
+static func input_polygon(viewport_width: float, kind: String, control_width: float) -> PackedVector2Array:
 	var control := control_rect(viewport_width, kind, control_width)
 	if kind.is_empty():
 		return PackedVector2Array([control.position, Vector2(control.end.x, control.position.y), control.end, Vector2(control.position.x, control.end.y)])
@@ -54,3 +51,8 @@ static func passthrough_polygon(viewport_width: float, kind: String, control_wid
 		Vector2(control.position.x, control.position.y),
 		Vector2(overlay.position.x, overlay.end.y),
 	])
+
+static func passthrough_polygon(viewport_width: float, kind: String, control_width: float) -> PackedVector2Array:
+	# Compatibility name for callers outside this project. input_polygon is the
+	# canonical exact hit shape.
+	return input_polygon(viewport_width, kind, control_width)

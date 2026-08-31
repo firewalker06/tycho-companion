@@ -259,7 +259,7 @@ func _has_motion() -> bool:
 
 func _update_passthrough() -> void:
 	get_window().mouse_passthrough = false
-	DisplayServer.window_set_mouse_passthrough(DesktopLayoutScript.passthrough_polygon(get_viewport_rect().size.x, overlay_kind, CONTROL_WIDTH))
+	DisplayServer.window_set_mouse_passthrough(DesktopLayoutScript.input_polygon(get_viewport_rect().size.x, overlay_kind, CONTROL_WIDTH))
 
 func _draw() -> void:
 	var viewport := get_viewport_rect()
