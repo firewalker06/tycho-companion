@@ -23,6 +23,12 @@ func _init() -> void:
 	assert(client.connection_status() == "setup")
 	client.disconnect_live()
 	assert(client.connection_status() == "setup")
+	for attempt in 3:
+		client._connection_failed("test failure")
+		assert(client.connection_status() == "retrying", "attempt %d should retry" % (attempt + 1))
+	client._connection_failed("test failure")
+	assert(client.connection_status() == "offline")
+	assert(client.connection_message().contains("Reconnect from Settings"))
 	client.free()
 
 	assert(Mapper.effective_state(Mapper.normalize_agent({"state": "failed", "awaiting_input": true})) == "awaiting-input")

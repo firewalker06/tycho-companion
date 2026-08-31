@@ -8,7 +8,9 @@ signal status_changed(status: String, message: String)
 signal snapshot_received(activity: Dictionary, resources: Dictionary, refreshed_at: String)
 
 const SETTINGS_PATH := "user://tycho-companion.cfg"
+const MAX_RETRIES := 3
 const BASE_BACKOFF_SECONDS := 2.0
+const MAX_BACKOFF_SECONDS := 30.0
 const POLL_SECONDS := 15.0
 
 var origin := ""
@@ -121,9 +123,12 @@ func _connection_failed(reason: String) -> void:
 	_generation += 1
 	_pending = 0
 	_retry_count += 1
-	var delay := minf(60.0, BASE_BACKOFF_SECONDS * pow(2.0, _retry_count - 1))
-	_next_refresh_at = Time.get_ticks_msec() + int(delay * 1000.0)
-	_set_status("retrying", "%s Retrying in %d seconds." % [reason, int(delay)])
+	if _retry_count <= MAX_RETRIES:
+		var delay := minf(MAX_BACKOFF_SECONDS, BASE_BACKOFF_SECONDS * pow(2.0, _retry_count - 1))
+		_next_refresh_at = Time.get_ticks_msec() + int(delay * 1000.0)
+		_set_status("retrying", "%s Retrying in %d seconds." % [reason, int(delay)])
+	else:
+		_set_status("offline", "%s Reconnect from Settings." % reason)
 
 func _set_status(next_status: String, next_message: String) -> void:
 	_status = next_status

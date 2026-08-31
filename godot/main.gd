@@ -120,8 +120,9 @@ func _build_controls() -> void:
 
 func _layout_controls() -> void:
 	var width := get_viewport_rect().size.x
-	control_area.position = Vector2(width - CONTROL_WIDTH - DesktopLayoutScript.CONTROL_MARGIN, DesktopLayoutScript.CONTROL_MARGIN)
-	control_area.size = Vector2(CONTROL_WIDTH, DesktopLayoutScript.CONTROL_HEIGHT)
+	var control := DesktopLayoutScript.control_rect(width, overlay_kind, CONTROL_WIDTH)
+	control_area.position = control.position
+	control_area.size = control.size
 	settings_panel.position = DesktopLayoutScript.overlay_rect(width, "settings").position
 	settings_panel.size = DesktopLayoutScript.overlay_rect(width, "settings").size
 	inspect_panel.position = DesktopLayoutScript.overlay_rect(width, "inspect").position
@@ -257,24 +258,21 @@ func _has_motion() -> bool:
 	return false
 
 func _update_passthrough() -> void:
-	var rect := control_area.get_global_rect()
-	if overlay_kind == "settings": rect = rect.merge(settings_panel.get_global_rect())
-	if overlay_kind == "inspect": rect = rect.merge(inspect_panel.get_global_rect())
-	var polygon := PackedVector2Array([rect.position, Vector2(rect.end.x, rect.position.y), rect.end, Vector2(rect.position.x, rect.end.y)])
 	get_window().mouse_passthrough = false
-	DisplayServer.window_set_mouse_passthrough(polygon)
+	DisplayServer.window_set_mouse_passthrough(DesktopLayoutScript.passthrough_polygon(get_viewport_rect().size.x, overlay_kind, CONTROL_WIDTH))
 
 func _draw() -> void:
 	var viewport := get_viewport_rect()
-	draw_texture_rect_region(WORKSHOP, viewport, WORKSHOP_REGION)
+	var strip := DesktopLayoutScript.strip_rect(viewport.size.x, overlay_kind)
+	draw_texture_rect_region(WORKSHOP, strip, WORKSHOP_REGION)
 	if agents.is_empty(): return
 	var gap := viewport.size.x / float(agents.size() + 1)
 	for index in agents.size():
-		_draw_caretaker(Vector2(gap * float(index + 1), viewport.size.y - 34.0), agents[index])
+		_draw_caretaker(Vector2(gap * float(index + 1), strip.position.y + 126.0), agents[index])
 
 func _draw_caretaker(position: Vector2, agent: Dictionary) -> void:
 	var state := StateMapperScript.effective_state(agent)
-	var cell := _pose_cell(state, agent.stale)
+	var cell := Vector2(StateMapperScript.caretaker_pose_cell(state, agent.stale))
 	var bob := sin(tide * 1.35 + position.x * 0.01) * 2.0 if state == "running" and not agent.stale else 0.0
 	var target := Rect2(position - Vector2(45, 92) + Vector2(0, bob), Vector2(90, 90))
 	var source := Rect2(cell * CARETAKER_CELL, CARETAKER_CELL)
@@ -283,16 +281,6 @@ func _draw_caretaker(position: Vector2, agent: Dictionary) -> void:
 	var cue := _cue_color(state)
 	draw_circle(position + Vector2(37, -72), 5, cue)
 	if agent.unread: draw_rect(Rect2(position + Vector2(-47, -59), Vector2(10, 8)), Color("f2b948"))
-
-func _pose_cell(state: String, stale: bool) -> Vector2:
-	if stale or state in ["stopped", "partial"]: return Vector2(2, 1)
-	match state:
-		"idle": return Vector2(0, 0)
-		"running": return Vector2(1, 0)
-		"awaiting-input": return Vector2(2, 0)
-		"succeeded": return Vector2(0, 1)
-		"failed", "blocked": return Vector2(1, 1)
-		_: return Vector2(0, 0)
 
 func _cue_color(state: String) -> Color:
 	match state:

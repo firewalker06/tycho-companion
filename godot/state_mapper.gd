@@ -62,6 +62,17 @@ static func effective_state(agent: Dictionary) -> String:
 		return "awaiting-input"
 	return agent.state
 
+static func caretaker_pose_cell(state: String, stale: bool) -> Vector2i:
+	if stale or state == "stopped":
+		return Vector2i(2, 1)
+	match state:
+		"idle": return Vector2i(0, 0)
+		"running": return Vector2i(1, 0)
+		"awaiting-input", "partial": return Vector2i(2, 0)
+		"succeeded": return Vector2i(0, 1)
+		"failed", "blocked": return Vector2i(1, 1)
+		_: return Vector2i(0, 0)
+
 static func visual_intent(raw: Dictionary) -> Dictionary:
 	var agent := normalize_agent(raw)
 	var state := effective_state(agent)
