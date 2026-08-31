@@ -8,14 +8,13 @@ signal status_changed(status: String, message: String)
 signal snapshot_received(activity: Dictionary, resources: Dictionary, refreshed_at: String)
 
 const SETTINGS_PATH := "user://tycho-companion.cfg"
-const MAX_RETRIES := 3
 const BASE_BACKOFF_SECONDS := 2.0
 const POLL_SECONDS := 15.0
 
 var origin := ""
 var _token := ""
-var _status := "demo"
-var _message := "Demo activity"
+var _status := "setup"
+var _message := "No Tycho connection configured"
 var _generation := 0
 var _retry_count := 0
 var _next_refresh_at := 0
@@ -71,7 +70,7 @@ func disconnect_live() -> void:
 	_pending = 0
 	_activity = {}
 	_resources = {}
-	_set_status("demo", "Disconnected — showing local demo activity")
+	_set_status("setup", "Disconnected. Configure Tycho to show live activity.")
 
 func refresh() -> void:
 	if not has_live_configuration() or _pending > 0:
@@ -122,12 +121,9 @@ func _connection_failed(reason: String) -> void:
 	_generation += 1
 	_pending = 0
 	_retry_count += 1
-	if _retry_count <= MAX_RETRIES:
-		var delay := minf(30.0, BASE_BACKOFF_SECONDS * pow(2.0, _retry_count - 1))
-		_next_refresh_at = Time.get_ticks_msec() + int(delay * 1000.0)
-		_set_status("retrying", "%s Retrying in %d seconds." % [reason, int(delay)])
-	else:
-		_set_status("offline", "%s Reconnect from Settings." % reason)
+	var delay := minf(60.0, BASE_BACKOFF_SECONDS * pow(2.0, _retry_count - 1))
+	_next_refresh_at = Time.get_ticks_msec() + int(delay * 1000.0)
+	_set_status("retrying", "%s Retrying in %d seconds." % [reason, int(delay)])
 
 func _set_status(next_status: String, next_message: String) -> void:
 	_status = next_status

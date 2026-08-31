@@ -14,15 +14,15 @@ func _init() -> void:
 	assert(Client.redact_secret("safe", fixture_token) == "safe")
 
 	var client := Client.new()
-	assert(client.connection_status() == "demo")
+	assert(client.connection_status() == "setup")
 	var bad_origin := client.connect_live("https://example.com", fixture_token)
 	assert(not bad_origin.ok)
 	assert(not str(bad_origin.error).contains(fixture_token))
 	var missing_token := client.connect_live("http://localhost", "")
 	assert(not missing_token.ok)
-	assert(client.connection_status() == "demo")
+	assert(client.connection_status() == "setup")
 	client.disconnect_live()
-	assert(client.connection_status() == "demo")
+	assert(client.connection_status() == "setup")
 	client.free()
 
 	assert(Mapper.effective_state(Mapper.normalize_agent({"state": "failed", "awaiting_input": true})) == "awaiting-input")

@@ -11,16 +11,49 @@ static func normalize_agent(raw: Dictionary) -> Dictionary:
 		state = "idle"
 	return {
 		"key": str(raw.get("key", "")),
-		"server": str(raw.get("server", "")),
+		"server": str(raw.get("server_name", raw.get("server", raw.get("server_key", "")))),
+		"server_key": str(raw.get("server_key", raw.get("server", ""))),
+		"server_status": str(raw.get("server_status", "")).to_lower(),
+		"offline": raw.get("offline", false) == true or raw.get("server_status", "") == "offline",
 		"project": str(raw.get("project_key", raw.get("project", ""))),
 		"agent": str(raw.get("name", raw.get("agent", ""))),
 		"state": state,
 		"unread": raw.get("unread", false) == true,
 		"awaiting_input": raw.get("awaiting_input", false) == true,
 		"blocked": raw.get("blocked", false) == true,
-		"stale": raw.get("stale", false) == true or raw.get("server_status", "") == "offline",
+		"stale": raw.get("stale", false) == true or raw.get("offline", false) == true or raw.get("server_status", "") in ["offline", "stale"],
 		"prompt_queue_count": raw.get("prompt_queue_count", null),
 	}
+
+static func flatten_activity(activity: Dictionary) -> Array[Dictionary]:
+	## Tycho's activity snapshot is server-qualified. Keep that identity and its
+	## health on every record; the scene must never infer it from agent data.
+	var flattened: Array[Dictionary] = []
+	var servers: Variant = activity.get("servers", [])
+	if not servers is Array:
+		return flattened
+	for server_value in servers:
+		if not server_value is Dictionary:
+			continue
+		var server: Dictionary = server_value
+		var server_key := str(server.get("key", server.get("server_key", "")))
+		var server_name := str(server.get("name", server.get("server_name", server_key)))
+		var health := str(server.get("health", server.get("status", ""))).to_lower()
+		var is_stale: bool = server.get("stale", false) == true or server.get("offline", false) == true or health in ["offline", "stale"]
+		var server_agents: Variant = server.get("agents", [])
+		if not server_agents is Array:
+			continue
+		for agent_value in server_agents:
+			if not agent_value is Dictionary:
+				continue
+			var agent: Dictionary = agent_value.duplicate()
+			agent["server_key"] = server_key
+			agent["server_name"] = server_name
+			agent["server_status"] = health
+			agent["offline"] = health == "offline" or server.get("offline", false) == true
+			agent["stale"] = is_stale or agent.get("stale", false) == true
+			flattened.append(agent)
+	return flattened
 
 static func effective_state(agent: Dictionary) -> String:
 	if agent.blocked:

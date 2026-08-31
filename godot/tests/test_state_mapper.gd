@@ -3,6 +3,19 @@ extends SceneTree
 const Mapper := preload("res://state_mapper.gd")
 
 func _init() -> void:
+	var activity := {
+		"servers": [{
+			"key": "north", "name": "North shore", "health": "offline",
+			"agents": [{"key": "a", "name": "Aster", "project_key": "harbor", "status": "running"}],
+		}, {
+			"key": "south", "name": "South shore", "agents": [{"key": "b", "name": "Bramble", "status": "idle"}],
+		}],
+	}
+	var flattened := Mapper.flatten_activity(activity)
+	assert(flattened.size() == 2, "server-qualified activity must not silently render zero agents")
+	var north := Mapper.normalize_agent(flattened[0])
+	assert(north.server == "North shore" and north.server_key == "north" and north.stale and north.offline and north.server_status == "offline")
+	assert(Mapper.normalize_agent(flattened[1]).server == "South shore")
 	var intent: Dictionary = Mapper.visual_intent({"key": "a", "server": "s", "status": "running", "awaiting_input": true, "blocked": true, "unread": true, "stale": true})
 	assert(intent.cue == "closed-gate")
 	assert(intent.unread)
