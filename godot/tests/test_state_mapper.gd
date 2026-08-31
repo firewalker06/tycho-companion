@@ -7,8 +7,13 @@ func _init() -> void:
 	assert(intent.cue == "closed-gate")
 	assert(intent.unread)
 	assert(intent.stale)
-	assert(Mapper.is_safe_origin("http://127.0.0.1:7373"))
-	assert(Mapper.is_safe_origin("https://tycho.example.ts.net"))
-	assert(not Mapper.is_safe_origin("https://example.com"))
+	for valid in ["http://127.0.0.1:7373", "http://localhost", "https://tycho.example.ts.net", "https://tycho"]:
+		assert(Mapper.is_safe_origin(valid), "expected safe origin: %s" % valid)
+	for unsafe in [
+		"http://localhost.evil.com", "https://example.ts.net.evil.com", "https://user@tycho",
+		"https://tycho/path", "https://tycho?query=value", "https://tycho#fragment",
+		"http://127.0.0.2", "ftp://localhost", "https://example.com",
+	]:
+		assert(not Mapper.is_safe_origin(unsafe), "expected rejected origin: %s" % unsafe)
 	print("StateMapper tests passed")
 	quit(0)

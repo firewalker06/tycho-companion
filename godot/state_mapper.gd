@@ -39,5 +39,57 @@ static func visual_intent(raw: Dictionary) -> Dictionary:
 	return {"id": "%s/%s" % [agent.server, agent.key], "cue": cue, "unread": agent.unread, "stale": agent.stale, "queue_count": agent.prompt_queue_count}
 
 static func is_safe_origin(value: String) -> bool:
-	var lower := value.to_lower()
-	return lower.begins_with("http://localhost") or lower.begins_with("http://127.0.0.1") or lower.begins_with("https://") and (lower.contains(".ts.net") or not lower.substr(8).contains("."))
+	var origin := parse_origin(value)
+	if origin.is_empty():
+		return false
+	var scheme: String = origin.scheme
+	var host: String = origin.host
+	if scheme == "http":
+		return host == "localhost" or host == "127.0.0.1"
+	if scheme == "https":
+		return _is_single_label(host) or _is_tailscale_host(host)
+	return false
+
+static func parse_origin(value: String) -> Dictionary:
+	# Godot has no general URL value type. Parse the origin grammar explicitly so callers
+	# cannot smuggle a path, credentials, query, or fragment through a string prefix check.
+	var parser := RegEx.new()
+	if parser.compile("^([A-Za-z][A-Za-z0-9+.-]*)://([^/?#]+)(/?)$") != OK:
+		return {}
+	var match := parser.search(value)
+	if match == null:
+		return {}
+	var scheme: String = match.get_string(1).to_lower()
+	var authority: String = match.get_string(2)
+	if authority.contains("@") or authority.contains("%"):
+		return {}
+	var pieces := authority.split(":", false)
+	if pieces.size() > 2 or pieces.is_empty():
+		return {}
+	var host: String = pieces[0].to_lower()
+	if host.is_empty() or not _is_hostname(host):
+		return {}
+	if pieces.size() == 2 and not _is_valid_port(pieces[1]):
+		return {}
+	return {"scheme": scheme, "host": host}
+
+static func _is_valid_port(value: String) -> bool:
+	if value.is_empty() or not value.is_valid_int():
+		return false
+	var port := value.to_int()
+	return port >= 1 and port <= 65535
+
+static func _is_hostname(host: String) -> bool:
+	var label := RegEx.new()
+	if label.compile("^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$") != OK:
+		return false
+	for part in host.split(".", false):
+		if label.search(part) == null:
+			return false
+	return true
+
+static func _is_single_label(host: String) -> bool:
+	return not host.contains(".")
+
+static func _is_tailscale_host(host: String) -> bool:
+	return host.ends_with(".ts.net") and host.length() > ".ts.net".length()
