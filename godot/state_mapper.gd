@@ -12,7 +12,7 @@ static func normalize_agent(raw: Dictionary) -> Dictionary:
 	return {
 		"key": str(raw.get("key", "")),
 		"server": str(raw.get("server_name", raw.get("server", raw.get("server_key", "")))),
-		"server_key": str(raw.get("server_key", raw.get("server", ""))),
+		"server_key": server_identity(raw),
 		"server_status": str(raw.get("server_status", "")).to_lower(),
 		"offline": raw.get("offline", false) == true or raw.get("server_status", "") == "offline",
 		"project": str(raw.get("project_key", raw.get("project", ""))),
@@ -23,6 +23,13 @@ static func normalize_agent(raw: Dictionary) -> Dictionary:
 		"blocked": raw.get("blocked", false) == true,
 		"stale": raw.get("stale", false) == true or raw.get("offline", false) == true or raw.get("server_status", "") in ["offline", "stale"],
 	}
+
+static func server_identity(raw: Dictionary) -> String:
+	var stable_key := str(raw.get("server_key", ""))
+	if not stable_key.is_empty():
+		return stable_key
+	# Compatibility only: older fixtures used `server` as both key and label.
+	return str(raw.get("server", ""))
 
 static func flatten_activity(activity: Dictionary) -> Array[Dictionary]:
 	## Tycho's activity snapshot is server-qualified. Keep that identity and its
@@ -79,7 +86,10 @@ static func visual_intent(raw: Dictionary) -> Dictionary:
 		"idle": "rest", "running": "workbench", "awaiting-input": "question-lantern", "blocked": "closed-gate",
 		"succeeded": "warm-lamp", "failed": "rain-cloud", "partial": "cracked-sign", "stopped": "stopped-tool",
 	}.get(state, "rest")
-	return {"id": "%s/%s" % [agent.server, agent.key], "cue": cue, "unread": agent.unread, "stale": agent.stale}
+	# A server_name-only legacy fixture has no former key to recover; keep this
+	# final display fallback deliberate. Live transport records always carry a key.
+	var server_identity: String = agent.server_key if not agent.server_key.is_empty() else agent.server
+	return {"id": "%s/%s" % [server_identity, agent.key], "cue": cue, "unread": agent.unread, "stale": agent.stale}
 
 static func is_safe_origin(value: String) -> bool:
 	var origin := parse_origin(value)

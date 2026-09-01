@@ -25,6 +25,14 @@ func _init() -> void:
 	assert(intent.cue == "closed-gate")
 	assert(intent.unread)
 	assert(intent.stale)
+	var shared_name_activity := {"servers": [
+		{"key": "east", "name": "Shared shore", "agents": [{"key": "a", "status": "idle"}]},
+		{"key": "west", "name": "Shared shore", "agents": [{"key": "a", "status": "idle"}]},
+	]}
+	var shared_name_agents := Mapper.flatten_activity(shared_name_activity)
+	assert(Mapper.visual_intent(shared_name_agents[0]).id == "east/a")
+	assert(Mapper.visual_intent(shared_name_agents[1]).id == "west/a")
+	assert(Mapper.visual_intent({"key": "a", "server": "legacy-name", "status": "idle"}).id == "legacy-name/a", "legacy fixtures deliberately fall back to display identity")
 	for valid in ["http://127.0.0.1:7373", "http://localhost", "https://tycho.example.ts.net", "https://tycho"]:
 		assert(Mapper.is_safe_origin(valid), "expected safe origin: %s" % valid)
 	for unsafe in [

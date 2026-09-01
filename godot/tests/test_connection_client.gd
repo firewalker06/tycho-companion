@@ -37,11 +37,27 @@ func _init() -> void:
 	scoped.origin = "https://old"
 	scoped._token = "saved-token"
 	scoped._credential_saved = true
-	scoped._apply_environment_configuration("https://new", "")
+	scoped._apply_environment_configuration("https://new", "environment-token")
 	assert(scoped.origin == "https://new")
-	assert(scoped._token.is_empty(), "an environment origin must never inherit another origin's token")
+	assert(scoped._token == "environment-token")
 	assert(not scoped.has_saved_credential())
 	scoped.free()
+	var invalid_pair := Client.new()
+	var invalid_pair_accesses: Array[String] = []
+	invalid_pair._initialize_connection(
+		PackedStringArray(),
+		func() -> void:
+			invalid_pair.origin = "https://persisted"
+			invalid_pair._token = "persisted-token"
+			invalid_pair._credential_saved = true,
+		func(key: String) -> String:
+			return "https://example.com" if key == "TYCHO_ORIGIN" else "environment-token",
+		func() -> void: invalid_pair_accesses.append("request"),
+	)
+	assert(not invalid_pair.has_live_configuration(), "an invalid explicit origin must reject the entire environment pair")
+	assert(invalid_pair._token.is_empty(), "an invalid origin's token must never attach to a persisted origin")
+	assert(invalid_pair_accesses.is_empty(), "a rejected environment pair must not start a request")
+	invalid_pair.free()
 
 	assert(Client.MAX_RETRIES == 3)
 	assert(Client.retry_decision(1) == {"status": "retrying", "delay_seconds": 2.0})
@@ -77,6 +93,8 @@ func _init() -> void:
 	}
 	var scene_agents := Client.sanitize_activity(raw_activity)
 	assert(scene_agents.size() == 1)
+	assert(scene_agents[0].key == "synthetic-agent")
+	assert(scene_agents[0].server_key == "synthetic-server")
 	for field in scene_agents[0].keys():
 		assert(Client.SCENE_AGENT_FIELDS.has(field), "unexpected scene field: %s" % field)
 	for field in Client.SCENE_AGENT_FIELDS:

@@ -146,7 +146,7 @@ Menu-bar NSStatusItem ─> Settings / Inspect / Open Tycho / Quit
 
 ### Smallest data contract
 
-Use these shipped surfaces; details are documented in [Remote Server](../REMOTE_SERVER.md) and implemented in [`remote_server.rb`](../../lib/hq/remote_server.rb), [`agent_activity_snapshot.rb`](../../lib/hq/domain/agent_activity_snapshot.rb), and [`scheduler.rb`](../../lib/hq/domain/scheduler.rb).
+Use these shipped surfaces; details are documented in [Remote Server](https://github.com/firewalker06/tycho/blob/94246230785a25dbd7504597b35904231fe29819/docs/REMOTE_SERVER.md) and implemented in [`remote_server.rb`](https://github.com/firewalker06/tycho/blob/94246230785a25dbd7504597b35904231fe29819/lib/hq/remote_server.rb), [`agent_activity_snapshot.rb`](https://github.com/firewalker06/tycho/blob/94246230785a25dbd7504597b35904231fe29819/lib/hq/domain/agent_activity_snapshot.rb), and [`scheduler.rb`](https://github.com/firewalker06/tycho/blob/94246230785a25dbd7504597b35904231fe29819/lib/hq/domain/scheduler.rb).
 
 1. `GET /servers/activity` at 5 seconds while any server has a running/blocked/awaiting-input agent and the display is awake; 15 seconds when visible but quiet; 60 seconds when the scene is hidden. It already returns `schema_version`, content-derived `revision`, server identity/health/staleness, aggregate unread count, and compact agents with lifecycle, unread, schedule identity, timing, result, summary, and delegation fields. The companion ignores `summary`.
 2. `GET /servers/{server_key}/activity` for each non-local server on the same cadence, as the current Remote UI does. The combined catalog supplies identity and a retained peer fallback; the focused request supplies each peer's current in-memory snapshot without waiting for a full resource refresh. Back off peers independently and keep the combined fallback when a peer is unreachable.
@@ -168,7 +168,7 @@ Proposed additive activity field:
 
 `agent_list_payload` already calculates `queued_prompts.length`, so add the same integer to `AgentActivitySnapshot#activity_payload` and `ACTIVITY_AGENT_FIELDS`. Treat absent as `null`, not zero, until a server proves support. This does not justify a new endpoint. If strict schema consumers exist, publish it as activity schema version 2 while accepting versions 1 and 2 in the companion.
 
-Do not add SSE/WebSocket for MVP. The present activity endpoint is in-memory, revisioned, compact, authenticated, and intentionally independent of full-page polling. The Remote UI already uses 3-second visible and 30-second hidden activity polling, while its broader refresh defaults are 5/10/30 seconds; the companion can poll more slowly because it is ambient and must favor energy use. See [`app.js`](../../lib/hq/remote_ui/assets/app.js).
+Do not add SSE/WebSocket for MVP. The present activity endpoint is in-memory, revisioned, compact, authenticated, and intentionally independent of full-page polling. The Remote UI already uses 3-second visible and 30-second hidden activity polling, while its broader refresh defaults are 5/10/30 seconds; the companion can poll more slowly because it is ambient and must favor energy use. See [`app.js`](https://github.com/firewalker06/tycho/blob/94246230785a25dbd7504597b35904231fe29819/lib/hq/remote_ui/assets/app.js).
 
 ## Windowing and platform constraints
 
@@ -345,11 +345,11 @@ Reassess engine choice with measured demand. A Godot implementation becomes cred
 
 ### Tycho repository
 
-- [Remote server architecture and endpoint reference](../REMOTE_SERVER.md)
-- [Multiserver resource design](../MULTISERVER_RESOURCES_PLAN.md)
-- [Scheduled runs](../SCHEDULED_RUNS.md)
-- [Agent delegation](../AGENT_DELEGATION.md)
-- [`AgentActivitySnapshot`](../../lib/hq/domain/agent_activity_snapshot.rb)
-- [`RemoteServer` and payload serializers](../../lib/hq/remote_server.rb)
-- [Remote UI polling client](../../lib/hq/remote_ui/assets/app.js)
-- [Scheduler payload](../../lib/hq/domain/scheduler.rb)
+- [Remote server architecture and endpoint reference](https://github.com/firewalker06/tycho/blob/94246230785a25dbd7504597b35904231fe29819/docs/REMOTE_SERVER.md)
+- [Multiserver resource design](https://github.com/firewalker06/tycho/blob/94246230785a25dbd7504597b35904231fe29819/docs/MULTISERVER_RESOURCES_PLAN.md)
+- [Scheduled runs](https://github.com/firewalker06/tycho/blob/94246230785a25dbd7504597b35904231fe29819/docs/SCHEDULED_RUNS.md)
+- [Agent delegation](https://github.com/firewalker06/tycho/blob/94246230785a25dbd7504597b35904231fe29819/docs/AGENT_DELEGATION.md)
+- [`AgentActivitySnapshot`](https://github.com/firewalker06/tycho/blob/94246230785a25dbd7504597b35904231fe29819/lib/hq/domain/agent_activity_snapshot.rb)
+- [`RemoteServer` and payload serializers](https://github.com/firewalker06/tycho/blob/94246230785a25dbd7504597b35904231fe29819/lib/hq/remote_server.rb)
+- [Remote UI polling client](https://github.com/firewalker06/tycho/blob/94246230785a25dbd7504597b35904231fe29819/lib/hq/remote_ui/assets/app.js)
+- [Scheduler payload](https://github.com/firewalker06/tycho/blob/94246230785a25dbd7504597b35904231fe29819/lib/hq/domain/scheduler.rb)

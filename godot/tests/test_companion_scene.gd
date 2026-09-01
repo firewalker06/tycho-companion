@@ -13,14 +13,22 @@ func _init() -> void:
 	assert(scene_rect.size.y == 300.0)
 	assert(is_equal_approx(scene_rect.position.x, 409.6))
 	var motions: Array[Dictionary] = []
-	for state in ["idle", "running", "awaiting-input", "succeeded", "blocked", "failed", "partial", "stopped"]:
+	for state in ["idle", "running", "awaiting-input", "succeeded", "blocked", "failed", "partial"]:
 		var start: Dictionary = Scene.idle_motion(state, false, 0.0, 0.37)
 		var later: Dictionary = Scene.idle_motion(state, false, 0.71, 0.37)
 		assert(start.offset != later.offset or start.rotation != later.rotation or start.scale != later.scale, "%s pose must animate" % state)
 		motions.append(later)
-	var stale_start: Dictionary = Scene.idle_motion("stopped", true, 0.0, 0.37)
-	var stale_later: Dictionary = Scene.idle_motion("stopped", true, 0.71, 0.37)
-	assert(stale_start != stale_later, "stale pose must animate")
+	for static_case in [
+		{"state": "running", "stale": true},
+		{"state": "stopped", "stale": false},
+		{"state": "offline", "stale": false},
+	]:
+		var static_start: Dictionary = Scene.idle_motion(static_case.state, static_case.stale, 0.0, 0.37)
+		var static_later: Dictionary = Scene.idle_motion(static_case.state, static_case.stale, 0.71, 0.37)
+		assert(static_start == static_later, "%s pose must remain frozen" % static_case.state)
+		assert(not Scene.has_permitted_motion(static_case))
+	assert(not Scene.has_permitted_motion({"state": "running", "stale": false, "offline": true, "blocked": false, "awaiting_input": false}))
+	assert(Scene.has_permitted_motion({"state": "idle", "stale": false, "blocked": false, "awaiting_input": false}))
 	var layer := CanvasLayer.new()
 	var scene := Scene.new()
 	get_root().add_child(layer)

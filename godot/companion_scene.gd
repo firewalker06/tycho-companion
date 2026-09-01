@@ -55,14 +55,9 @@ func _draw_caretaker(position: Vector2, agent: Dictionary) -> void:
 	draw_set_transform(Vector2.ZERO, 0.0, Vector2.ONE)
 
 static func idle_motion(state: String, stale: bool, animation_time: float, phase: float) -> Dictionary:
+	if not has_permitted_motion({"state": state, "stale": stale, "blocked": false, "awaiting_input": false}):
+		return _static_motion()
 	var wave := sin(animation_time * 1.4 + phase)
-	if stale:
-		var stale_wave := sin(animation_time * 0.55 + phase)
-		return {
-			"offset": Vector2(0.0, stale_wave * 0.7),
-			"rotation": stale_wave * 0.008,
-			"scale": Vector2(1.0 + stale_wave * 0.004, 1.0 - stale_wave * 0.004),
-		}
 	match state:
 		"idle":
 			return {"offset": Vector2(0.0, wave * 0.8), "rotation": wave * 0.006, "scale": Vector2(1.0 - wave * 0.006, 1.0 + wave * 0.009)}
@@ -78,9 +73,22 @@ static func idle_motion(state: String, stale: bool, animation_time: float, phase
 		"failed", "blocked":
 			var tired_wave := sin(animation_time * 0.75 + phase)
 			return {"offset": Vector2(0.0, tired_wave * 0.6), "rotation": tired_wave * 0.011, "scale": Vector2(1.0 + tired_wave * 0.003, 1.0 - tired_wave * 0.006)}
-		_:
+		"partial":
 			var rest_wave := sin(animation_time * 0.9 + phase)
 			return {"offset": Vector2(rest_wave * 0.5, rest_wave * 0.5), "rotation": rest_wave * 0.007, "scale": Vector2.ONE}
+		_:
+			return _static_motion()
+
+static func has_permitted_motion(agent: Dictionary) -> bool:
+	if str(agent.get("state", "")).to_lower() in ["stopped", "offline", "stale"]:
+		return false
+	var normalized := StateMapperScript.normalize_agent(agent)
+	if normalized.stale or normalized.offline:
+		return false
+	return StateMapperScript.effective_state(normalized) not in ["stopped", "offline", "stale"]
+
+static func _static_motion() -> Dictionary:
+	return {"offset": Vector2.ZERO, "rotation": 0.0, "scale": Vector2.ONE}
 
 func _cue_color(state: String) -> Color:
 	match state:

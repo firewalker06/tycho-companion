@@ -18,7 +18,7 @@ const BASE_BACKOFF_SECONDS := 2.0
 const MAX_BACKOFF_SECONDS := 30.0
 const POLL_SECONDS := 15.0
 const CREDENTIAL_FREE_DIAGNOSTIC_FLAGS := ["--debug-render-snapshot", "--debug-render-check"]
-const SCENE_AGENT_FIELDS := ["server", "project", "agent", "state", "unread", "awaiting_input", "blocked", "stale"]
+const SCENE_AGENT_FIELDS := ["key", "server", "server_key", "project", "agent", "state", "unread", "awaiting_input", "blocked", "stale"]
 
 var origin := ""
 var _token := ""
@@ -70,16 +70,21 @@ static func is_credential_free_diagnostic(user_args: PackedStringArray) -> bool:
 
 func _apply_environment_configuration(env_origin: String, env_token: String) -> void:
 	var clean_env_origin := env_origin.strip_edges()
-	if not clean_env_origin.is_empty() and StateMapperScript.is_safe_origin(clean_env_origin) and clean_env_origin != origin:
-		origin = clean_env_origin
+	var clean_env_token := env_token.strip_edges()
+	if clean_env_origin.is_empty() and clean_env_token.is_empty():
+		return
+	# Environment credentials are one atomic, transient pair. Never combine one
+	# half (including a token paired with an invalid origin) with persisted state.
+	_credential_saved = false
+	_token_can_persist = false
+	if clean_env_origin.is_empty() or clean_env_token.is_empty() or not StateMapperScript.is_safe_origin(clean_env_origin):
+		origin = ""
 		_token = ""
-		_credential_saved = false
-		_credential_message = "The saved token belongs to a different origin."
-	if not env_token.is_empty():
-		_token = env_token
-		_credential_saved = false
-		_token_can_persist = false
-		_credential_message = "Environment token active; it will not be saved."
+		_credential_message = "TYCHO_ORIGIN and TYCHO_TOKEN must be a complete pair with a safe origin."
+		return
+	origin = clean_env_origin
+	_token = env_token
+	_credential_message = "Environment credential active; it will not be saved."
 
 func _process(_delta: float) -> void:
 	if has_live_configuration() and (_status == "connected" or _status == "retrying") and Time.get_ticks_msec() >= _next_refresh_at:

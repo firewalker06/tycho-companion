@@ -7,6 +7,19 @@ class FailingClient extends Node:
 		return {"ok": false, "message": "synthetic save failure"}
 
 func _init() -> void:
+	var motion_main := Main.new()
+	motion_main.companion_scene = preload("res://companion_scene.gd").new()
+	motion_main.add_child(motion_main.companion_scene)
+	motion_main.agents = [{"state": "running", "stale": true, "blocked": false, "awaiting_input": false}]
+	motion_main._sync_companion_scene()
+	assert(not motion_main.is_processing(), "an all-stale scene must disable continuous processing")
+	motion_main.agents = [{"state": "idle", "stale": false, "blocked": false, "awaiting_input": false}]
+	motion_main._sync_companion_scene()
+	assert(motion_main.is_processing(), "a permitted ambient loop must enable processing")
+	motion_main.agents = [{"state": "stopped", "stale": false, "blocked": false, "awaiting_input": false}]
+	motion_main._sync_companion_scene()
+	assert(not motion_main.is_processing(), "a stopped scene must disable continuous processing")
+	motion_main.free()
 	for initial_overlay in ["", "settings"]:
 		var main := Main.new()
 		main.client = FailingClient.new()

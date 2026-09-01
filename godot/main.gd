@@ -451,7 +451,10 @@ func _update_inspect_text() -> void:
 	inspect_text.text = "\n".join(lines)
 
 func _has_motion() -> bool:
-	return not (debug_agents if debug_render_active else agents).is_empty()
+	for agent in debug_agents if debug_render_active else agents:
+		if CompanionSceneScript.has_permitted_motion(agent):
+			return true
+	return false
 
 func _sync_companion_scene() -> void:
 	if companion_scene == null:
@@ -459,6 +462,7 @@ func _sync_companion_scene() -> void:
 	companion_scene.overlay_kind = overlay_kind
 	companion_scene.tide = tide
 	companion_scene.replace_agents(debug_agents if debug_render_active else agents)
+	set_process(_has_motion())
 
 func _update_passthrough() -> void:
 	get_window().mouse_passthrough = false
