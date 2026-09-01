@@ -1,0 +1,34 @@
+{
+  "manifestVersion": 3,
+  "id": "openpets.tycho-companion",
+  "name": "$t:plugin.name",
+  "description": "$t:plugin.description",
+  "version": "0.1.0",
+  "runtime": "javascript",
+  "icon": "focus",
+  "sdkVersion": "3.3.0",
+  "entry": "index.js",
+  "permissions": [
+    "network",
+    "network:local",
+    "schedule",
+    "storage",
+    "pet:speak",
+    "pet:pin",
+    "pet:reaction",
+    "pets:manage",
+    "commands",
+    "status"
+  ],
+  "network": {
+    "hosts": ["127.0.0.1:7737"]
+  },
+  "configSchema": {
+    "petPackageIds": {
+      "type": "text",
+      "default": "snoopy",
+      "label": "$t:config.petPackageIds.label",
+      "description": "$t:config.petPackageIds.description"
+    }
+  }
+}

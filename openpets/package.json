@@ -1,0 +1,16 @@
+{
+  "name": "tycho-companion-openpets-prototype",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "test": "node --test adapter/test/*.test.mjs plugin/test.js",
+    "test:adapter": "node --test adapter/test/*.test.mjs",
+    "test:plugin": "node --test plugin/test.js",
+    "benchmark": "node benchmark.mjs",
+    "resource:adapter": "node adapter/idle-resource-check.mjs",
+    "fixture:real-host": "node adapter/real-host-lifecycle-fixture.mjs"
+  },
+  "devDependencies": {
+    "@open-pets/plugin-sdk": "3.3.0"
+  }
+}
