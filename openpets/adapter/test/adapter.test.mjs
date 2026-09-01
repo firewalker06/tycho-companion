@@ -8,14 +8,16 @@ import test from "node:test";
 import {
   ADAPTER_HOST,
   AssignmentStore,
+  PollController,
   TychoPoller,
   sanitizeActivity,
   startAdapter,
+  transientBackoffMs,
   validateTychoOrigin,
 } from "../tycho-loopback-adapter.mjs";
 
 function agent(key, status = "idle", extra = {}) {
-  return { key, status, unread: false, archived: false, ...extra };
+  return { key, status, unread: false, archived: false, awaiting_input: false, blocked: false, ...extra };
 }
 
 function activity(servers) {
@@ -79,6 +81,60 @@ test("sanitization keeps lifecycle and unread independent with opaque stable ide
   assert.ok(Object.keys(persisted.assignments).every((key) => /^[a-f0-9]{64}$/.test(key)));
   assert.ok(!JSON.stringify(persisted).includes("one"));
   assert.ok(!JSON.stringify(persisted).includes("run"));
+});
+
+test("current Tycho server status contract maps loading and unauthorized to attention", async (t) => {
+  const { store } = await temporaryStore(t);
+  const loading = await sanitizeActivity(activity([server("loading", [agent("a", "running")], { status: "loading" })]), store);
+  assert.equal(loading.health, "stale");
+  assert.equal(loading.pets[0].health, "stale");
+  assert.equal(loading.pets[0].attention, true);
+  assert.equal(loading.pets[0].lifecycle, "running");
+
+  const unauthorized = await sanitizeActivity(activity([server("loading", [agent("a", "running")], { status: "unauthorized" })]), store);
+  assert.equal(unauthorized.health, "offline");
+  assert.equal(unauthorized.pets[0].health, "offline");
+  assert.equal(unauthorized.pets[0].attention, true);
+  assert.equal(unauthorized.pets[0].lifecycle, "running");
+});
+
+test("malformed server or agent rows reject atomically and preserve assignments", async (t) => {
+  const { store } = await temporaryStore(t);
+  const valid = activity([server("s", [agent("a", "running")])]);
+  const first = await sanitizeActivity(valid, store);
+  const assignments = [...store.assignments];
+  const malformed = [
+    activity([server("s", [agent("a", "running")]), { key: "bad", status: "mystery", stale: false, agents: [] }]),
+    activity([server("s", [agent("a", "unknown")])]),
+    activity([server("s", [{ ...agent("a"), unread: "yes" }])]),
+    activity([server("s", [agent("a")]), null]),
+    activity([server("s", [agent("a"), agent("a")])]),
+    activity([server("s", []), server("s", [])]),
+  ];
+  for (const candidate of malformed) {
+    await assert.rejects(sanitizeActivity(candidate, store));
+    assert.deepEqual([...store.assignments], assignments);
+  }
+  assert.deepEqual(await sanitizeActivity(valid, store), first);
+});
+
+test("polling rejects a malformed successful response without replacing the last valid snapshot", async (t) => {
+  const { store } = await temporaryStore(t);
+  const responses = [
+    new Response(JSON.stringify(activity([server("s", [agent("a", "running")])])), { status: 200 }),
+    new Response(JSON.stringify(activity([server("s", [agent("a", "invented")])])), { status: 200 }),
+  ];
+  const poller = new TychoPoller({
+    origin: "http://127.0.0.1:7373",
+    credential: randomUUID(),
+    store,
+    fetchImpl: async () => responses.shift(),
+  });
+  const valid = await poller.poll();
+  const assignments = [...store.assignments];
+  assert.deepEqual(await poller.poll(), valid);
+  assert.deepEqual([...store.assignments], assignments);
+  assert.equal(poller.outcome, "transient");
 });
 
 test("terminal, stale, rerun, archive, and cleanup have stable release semantics", async (t) => {
@@ -156,6 +212,60 @@ test("unsupported schema, invalid JSON, authorization failure, oversize, and tim
     fetchImpl: async () => new Response(JSON.stringify(activity([])), { status: 200 }),
   });
   assert.equal((await empty.poll()).health, "online");
+});
+
+test("one confirmed 401 halts polling until explicit safe reconfiguration", async (t) => {
+  const { store } = await temporaryStore(t);
+  let calls = 0;
+  const poller = new TychoPoller({
+    origin: "http://127.0.0.1:7373",
+    credential: randomUUID(),
+    store,
+    fetchImpl: async () => {
+      calls += 1;
+      return calls === 1
+        ? new Response("denied", { status: 401 })
+        : new Response(JSON.stringify(activity([])), { status: 200 });
+    },
+  });
+  const scheduled = [];
+  const controller = new PollController({ poller, schedule: (_callback, delay) => scheduled.push(delay), cancel: () => {} });
+  await controller.start();
+  assert.equal(calls, 1);
+  assert.equal(poller.authenticationBlocked, true);
+  assert.deepEqual(scheduled, []);
+  await controller.tick();
+  assert.equal(calls, 1);
+  await controller.reconfigure({ origin: "http://localhost:7373", credential: randomUUID() });
+  assert.equal(calls, 2);
+  assert.equal(poller.authenticationBlocked, false);
+  assert.deepEqual(scheduled, [5_000]);
+  controller.stop();
+});
+
+test("transient retry delays are deterministic exponential and bounded", async (t) => {
+  assert.deepEqual([1, 2, 3, 4, 5, 20].map(transientBackoffMs), [5_000, 10_000, 20_000, 40_000, 60_000, 60_000]);
+  const { store } = await temporaryStore(t);
+  const poller = new TychoPoller({
+    origin: "http://127.0.0.1:7373",
+    credential: randomUUID(),
+    store,
+    fetchImpl: async () => new Response("unavailable", { status: 503 }),
+  });
+  const scheduled = [];
+  const callbacks = [];
+  const controller = new PollController({
+    poller,
+    schedule: (callback, delay) => { callbacks.push(callback); scheduled.push(delay); return callbacks.length; },
+    cancel: () => {},
+  });
+  await controller.start();
+  await callbacks.shift()();
+  await callbacks.shift()();
+  await callbacks.shift()();
+  await callbacks.shift()();
+  assert.deepEqual(scheduled, [5_000, 10_000, 20_000, 40_000, 60_000]);
+  controller.stop();
 });
 
 test("loopback server exposes only GET /snapshot and never returns its credential", async (t) => {

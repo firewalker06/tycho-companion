@@ -8,6 +8,7 @@ import {
   POLL_SCHEDULE_ID,
   STORAGE_KEY,
   register,
+  transientPollDelay,
   validateSnapshot,
   visibilityPriority,
 } from "./index.js";
@@ -54,6 +55,7 @@ test("snapshot validation rejects unbounded or identity-bearing shapes", () => {
   assert.equal(validateSnapshot(snapshot("r1", [{ ...entity(1), lifecycle: "unknown" }])), null);
   assert.ok(visibilityPriority(entity(1, "blocked")) > visibilityPriority(entity(2, "running")));
   assert.ok(visibilityPriority(entity(1, "idle", { unread: true })) > visibilityPriority(entity(2, "failed")));
+  assert.deepEqual([5_000, 10_000, 20_000, 40_000, 60_000].map(transientPollDelay), [10_000, 20_000, 40_000, 60_000, 60_000]);
 });
 
 test("the default pet plus four same-package spawns enforce five visible pets and explicit overflow", async () => {
@@ -152,6 +154,21 @@ test("attention states stay recognizable while lifecycle and unread remain indep
   await h.stop();
 });
 
+test("partial has a persistent waiting cue, label, and one transition reaction", async () => {
+  const h = harnessFor(snapshot("partial-1", [entity(1, "running")]));
+  await h.start();
+  const reactions = h.calls.react.length;
+  h.net.mock(ADAPTER_SNAPSHOT_URL, { json: snapshot("partial-2", [entity(1, "partial")]) });
+  await h.clock.advance("5s");
+  assert.equal(h.calls.statusReactions.at(-1), "waiting");
+  assert.ok(h.calls.bubbles.some((bubble) => bubble.spec.text === "Partial"));
+  assert.equal(h.calls.react.length, reactions + 1);
+  assert.equal(h.calls.react.at(-1), "waiting");
+  await h.clock.advance("5s");
+  assert.equal(h.calls.react.length, reactions + 1, "unchanged partial state must not replay");
+  await h.stop();
+});
+
 test("server-wide offline state remains explicit even when there are no assigned pets", async () => {
   const h = harnessFor(snapshot("offline-empty", [], "offline"));
   await h.start();
@@ -167,6 +184,11 @@ test("adapter restart and plugin restart rehydrate assignments but do not replay
   await first.start();
   assert.equal(first.calls.react.length, 0, "initial terminal state is rendered without a one-shot replay");
   const persisted = structuredClone(first.calls.storage.get(STORAGE_KEY));
+  assert.deepEqual(Object.keys(persisted).sort(), ["assignment_revision", "assignments"]);
+  assert.equal(persisted.assignment_revision, 1);
+  for (const forbidden of ["lifecycle", "active", "attention", "unread", "health", "revision"]) {
+    assert.equal(JSON.stringify(persisted).includes(`\"${forbidden}\"`), false, `${forbidden} must remain memory-only`);
+  }
   const firstPackages = [...first.calls.spawnedPets];
   await first.stop();
 
@@ -177,6 +199,60 @@ test("adapter restart and plugin restart rehydrate assignments but do not replay
   assert.equal(restarted.calls.react.length, 0, "plugin restart must not replay terminal or unread transitions");
   assert.deepEqual(restarted.calls.storage.get(STORAGE_KEY).assignments, persisted.assignments);
   await restarted.stop();
+});
+
+test("legacy assignment storage migrates without retaining activity history", async () => {
+  const value = snapshot("current", [entity(1, "succeeded", { unread: true, attention: true })]);
+  const h = harnessFor(value);
+  h.calls.storage.set(STORAGE_KEY, {
+    version: 1,
+    revision: "legacy-source-revision",
+    assignments: { [entity(1).entity_id]: { petId: "snoopy", slot: 0 } },
+    last: { [entity(1).entity_id]: entity(1, "failed", { unread: true, attention: true }) },
+  });
+  await h.start();
+  assert.deepEqual(Object.keys(h.calls.storage.get(STORAGE_KEY)).sort(), ["assignment_revision", "assignments"]);
+  assert.equal(h.calls.react.length, 0, "discarded legacy history cannot replay a transition");
+  await h.stop();
+});
+
+test("a malformed adapter snapshot preserves the last valid model and assignments", async () => {
+  const h = harnessFor(snapshot("valid", [entity(1, "running"), entity(2, "idle")]));
+  await h.start();
+  const persisted = structuredClone(h.calls.storage.get(STORAGE_KEY));
+  const reactions = [...h.calls.statusReactions];
+  const bubbleCount = h.calls.bubbles.length;
+  h.net.mock(ADAPTER_SNAPSHOT_URL, { json: snapshot("bad", [{ ...entity(3), lifecycle: "invented" }]) });
+  await h.clock.advance("5s");
+  assert.deepEqual(h.calls.storage.get(STORAGE_KEY), persisted);
+  assert.deepEqual(h.calls.statusReactions, reactions);
+  assert.equal(h.calls.bubbles.length, bubbleCount);
+  assert.match(h.calls.status.at(-1).text, /response rejected/);
+  await h.stop();
+});
+
+test("unload during a delayed fetch cannot write, spawn, or reschedule after cleanup", async () => {
+  const h = createTestHarness(register, { permissions: PERMISSIONS, config: { petPackageIds: "snoopy" }, nowMs: 1_000_000 });
+  let releaseFetch;
+  let markFetchStarted;
+  const fetchStarted = new Promise((resolve) => { markFetchStarted = resolve; });
+  const delayed = new Promise((resolve) => { releaseFetch = resolve; });
+  h.ctx.net.fetch = async () => {
+    markFetchStarted();
+    await delayed;
+    return { ok: true, json: snapshot("late", [entity(1, "running"), entity(2, "blocked")]) };
+  };
+  const starting = h.start();
+  await fetchStarted;
+  await h.stop();
+  const statusCount = h.calls.status.length;
+  releaseFetch();
+  await starting;
+  assert.equal(h.calls.storage.has(STORAGE_KEY), false);
+  assert.equal(h.calls.spawnedPets.length, 0);
+  assert.equal(h.calls.status.length, statusCount);
+  assert.equal(h.calls.schedules.size, 0);
+  assert.equal(h.calls.commands.size, 0);
 });
 
 test("network loss keeps the last sanitized model, marks it offline once, backs off, and cleans up", async () => {

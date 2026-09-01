@@ -6,7 +6,7 @@
   "version": "0.1.0",
   "runtime": "javascript",
   "icon": "focus",
-  "sdkVersion": "3.0.0",
+  "sdkVersion": "3.3.0",
   "entry": "index.js",
   "permissions": [
     "network",

@@ -11,6 +11,7 @@ export const SNAPSHOT_SCHEMA_VERSION = 1;
 export const MAX_ACTIVITY_BYTES = 512 * 1024;
 export const MAX_AGENTS = 200;
 export const POLL_INTERVAL_MS = 5_000;
+export const MAX_POLL_BACKOFF_MS = 60_000;
 export const REQUEST_TIMEOUT_MS = 4_000;
 
 const LIFECYCLES = new Set([
@@ -25,6 +26,7 @@ const LIFECYCLES = new Set([
 ]);
 
 const HEALTH_RANK = { online: 0, stale: 1, offline: 2 };
+const SERVER_STATUSES = new Set(["online", "loading", "unauthorized", "offline"]);
 
 function boundedString(value, maxLength = 128) {
   return typeof value === "string" && value.length > 0 && value.length <= maxLength ? value : null;
@@ -110,13 +112,12 @@ export function validateTychoOrigin(value) {
 function effectiveLifecycle(agent) {
   if (agent.blocked === true) return "blocked";
   if (agent.awaiting_input === true) return "awaiting-input";
-  return LIFECYCLES.has(agent.status) ? agent.status : "idle";
+  return agent.status;
 }
 
 function serverHealth(server) {
-  const status = typeof server.status === "string" ? server.status.toLowerCase() : "";
-  if (["offline", "disconnected", "unreachable"].includes(status)) return "offline";
-  if (server.stale === true || status === "stale") return "stale";
+  if (server.status === "unauthorized" || server.status === "offline") return "offline";
+  if (server.stale || server.status === "loading") return "stale";
   return "online";
 }
 
@@ -130,20 +131,54 @@ function snapshotRevision(entities, health) {
 
 export async function sanitizeActivity(activity, store) {
   if (activity?.schema_version !== 1 || !Array.isArray(activity.servers)) throw new Error("Unsupported activity snapshot.");
+  const validatedServers = [];
+  let agentCount = 0;
+  const serverKeys = new Set();
+  const identities = new Set();
+
+  for (const candidate of activity.servers) {
+    if (!candidate || typeof candidate !== "object" || Array.isArray(candidate)) throw new Error("Invalid activity server row.");
+    const key = boundedString(candidate.key);
+    if (!key || !SERVER_STATUSES.has(candidate.status) || typeof candidate.stale !== "boolean" || !Array.isArray(candidate.agents)) {
+      throw new Error("Invalid activity server row.");
+    }
+    if (serverKeys.has(key)) throw new Error("Duplicate activity server row.");
+    serverKeys.add(key);
+    const agents = [];
+    for (const row of candidate.agents) {
+      if (!row || typeof row !== "object" || Array.isArray(row)) throw new Error("Invalid activity agent row.");
+      const agentKey = boundedString(row.key);
+      if (!agentKey || !LIFECYCLES.has(row.status) || typeof row.unread !== "boolean" ||
+          typeof row.archived !== "boolean" || typeof row.awaiting_input !== "boolean" || typeof row.blocked !== "boolean") {
+        throw new Error("Invalid activity agent row.");
+      }
+      const identity = `${key}\0${agentKey}`;
+      if (identities.has(identity)) throw new Error("Duplicate activity agent row.");
+      identities.add(identity);
+      agents.push({
+        key: agentKey,
+        status: row.status,
+        unread: row.unread,
+        archived: row.archived,
+        awaiting_input: row.awaiting_input,
+        blocked: row.blocked,
+      });
+      if (!row.archived && ++agentCount > MAX_AGENTS) throw new Error("Activity snapshot has too many agents.");
+    }
+    validatedServers.push({ key, status: candidate.status, stale: candidate.stale, agents });
+  }
+
   const entities = [];
   const retainedKeys = [];
   let aggregateHealth = "online";
 
-  for (const server of activity.servers) {
-    const serverKey = boundedString(server?.key);
-    if (!serverKey || !Array.isArray(server.agents)) continue;
+  for (const server of validatedServers) {
+    const serverKey = server.key;
     const health = serverHealth(server);
     if (HEALTH_RANK[health] > HEALTH_RANK[aggregateHealth]) aggregateHealth = health;
     for (const agent of server.agents) {
-      if (entities.length >= MAX_AGENTS) break;
-      if (agent?.archived === true) continue;
-      const agentKey = boundedString(agent?.key);
-      if (!agentKey) continue;
+      if (agent.archived) continue;
+      const agentKey = agent.key;
       const assignment = store.idFor(serverKey, agentKey);
       retainedKeys.push(assignment.key);
       const lifecycle = effectiveLifecycle(agent);
@@ -200,11 +235,15 @@ export class TychoPoller {
     this.fetchImpl = fetchImpl;
     this.timeoutMs = timeoutMs;
     this.snapshot = offlineSnapshot({ pets: [] });
+    this.outcome = "transient";
+    this.authenticationBlocked = false;
   }
 
   async poll() {
+    if (this.authenticationBlocked) return this.snapshot;
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), this.timeoutMs);
+    let preserveLastValid = false;
     try {
       const response = await this.fetchImpl(`${this.origin}/servers/activity`, {
         method: "GET",
@@ -212,7 +251,14 @@ export class TychoPoller {
         redirect: "error",
         signal: controller.signal,
       });
+      if (response.status === 401) {
+        this.authenticationBlocked = true;
+        this.outcome = "authentication";
+        this.snapshot = offlineSnapshot(this.snapshot);
+        return this.snapshot;
+      }
       if (!response.ok) throw new Error("Tycho activity request failed.");
+      preserveLastValid = true;
       const declaredBytes = Number(response.headers.get("content-length"));
       if (Number.isFinite(declaredBytes) && declaredBytes > MAX_ACTIVITY_BYTES) throw new Error("Tycho activity response was too large.");
       const reader = response.body?.getReader();
@@ -233,12 +279,64 @@ export class TychoPoller {
       const body = reader ? new TextDecoder().decode(Buffer.concat(chunks)) : await response.text();
       if (Buffer.byteLength(body) > MAX_ACTIVITY_BYTES) throw new Error("Tycho activity response was too large.");
       this.snapshot = await sanitizeActivity(JSON.parse(body), this.store);
+      this.outcome = "success";
     } catch {
-      this.snapshot = offlineSnapshot(this.snapshot);
+      this.outcome = "transient";
+      if (!preserveLastValid) this.snapshot = offlineSnapshot(this.snapshot);
     } finally {
       clearTimeout(timer);
     }
     return this.snapshot;
+  }
+}
+
+export function transientBackoffMs(failureCount) {
+  const exponent = Math.max(0, Math.min(30, Number.isInteger(failureCount) ? failureCount - 1 : 0));
+  return Math.min(POLL_INTERVAL_MS * (2 ** exponent), MAX_POLL_BACKOFF_MS);
+}
+
+export class PollController {
+  constructor({ poller, schedule = setTimeout, cancel = clearTimeout }) {
+    this.poller = poller;
+    this.schedule = schedule;
+    this.cancel = cancel;
+    this.timer = null;
+    this.stopped = false;
+    this.transientFailures = 0;
+  }
+
+  async start() {
+    await this.tick();
+  }
+
+  async tick() {
+    if (this.stopped || this.poller.authenticationBlocked) return;
+    await this.poller.poll();
+    if (this.stopped || this.poller.authenticationBlocked) return;
+    if (this.poller.outcome === "success") this.transientFailures = 0;
+    else this.transientFailures += 1;
+    const delay = this.poller.outcome === "success" ? POLL_INTERVAL_MS : transientBackoffMs(this.transientFailures);
+    this.timer = this.schedule(() => this.tick(), delay);
+    this.timer?.unref?.();
+  }
+
+  stop() {
+    this.stopped = true;
+    if (this.timer !== null) this.cancel(this.timer);
+    this.timer = null;
+  }
+
+  async reconfigure({ origin, credential }) {
+    const safeOrigin = validateTychoOrigin(origin);
+    if (!safeOrigin || typeof credential !== "string" || credential.length === 0) throw new Error("Safe Tycho adapter configuration is required.");
+    if (this.timer !== null) this.cancel(this.timer);
+    this.timer = null;
+    this.transientFailures = 0;
+    this.poller.origin = safeOrigin;
+    this.poller.credential = credential;
+    this.poller.authenticationBlocked = false;
+    this.poller.outcome = "transient";
+    await this.tick();
   }
 }
 
@@ -248,7 +346,8 @@ export async function startAdapter({ origin, credential, stateFile, port = ADAPT
   const store = new AssignmentStore(stateFile);
   await store.load();
   const poller = new TychoPoller({ origin: safeOrigin, credential, store, fetchImpl });
-  await poller.poll();
+  const controller = new PollController({ poller });
+  await controller.start();
 
   const server = createServer((request, response) => {
     if (request.method !== "GET") {
@@ -268,14 +367,13 @@ export async function startAdapter({ origin, credential, stateFile, port = ADAPT
     server.once("error", reject);
     server.listen(port, ADAPTER_HOST, resolve);
   });
-  const interval = setInterval(() => void poller.poll(), POLL_INTERVAL_MS);
-  interval.unref?.();
   return {
     server,
     poller,
     address: server.address(),
+    reconfigure: (configuration) => controller.reconfigure(configuration),
     async close() {
-      clearInterval(interval);
+      controller.stop();
       await new Promise((resolve, reject) => server.close((error) => (error ? reject(error) : resolve())));
     },
   };

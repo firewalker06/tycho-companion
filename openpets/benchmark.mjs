@@ -18,6 +18,9 @@ const source = {
       key: `synthetic-agent-${index}`,
       status: index % 10 === 0 ? "blocked" : index % 3 === 0 ? "running" : "idle",
       unread: index % 13 === 0,
+      archived: false,
+      awaiting_input: false,
+      blocked: index % 10 === 0,
     })),
   }],
 };

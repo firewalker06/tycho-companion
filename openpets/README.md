@@ -10,7 +10,7 @@ The adapter is the only component that reads the Tycho origin and bearer credent
 - OpenPets built from commit `6c8187c4b67d4e27c6e4e573530bd74b5e998c75`, or another SDK v3 build whose manifest validator and network bridge support `network:local`.
 - At least one non-built-in OpenPets pet package installed. The default plugin setting uses `snoopy` for spawned windows.
 
-The published `@open-pets/cli` 3.3.0 package predates `network:local` and rejects this manifest. The validator and runtime at the pinned source commit accept it. Treat this as a prototype compatibility limit, not a reason to remove the local-network permission.
+The test harness is pinned exactly to `@open-pets/plugin-sdk` 3.3.0. The published `@open-pets/cli` 3.3.0 package predates `network:local` and rejects this manifest; the CLI and desktop validators built from the research-pinned source commit accept it. Treat the published-package mismatch as a prototype compatibility limit, not a reason to remove the local-network permission.
 
 ## Setup
 
@@ -38,9 +38,11 @@ OpenPets SDK v3 limits a plugin to four spawned pets. This prototype uses the ex
 
 ## State behavior
 
-The adapter keeps lifecycle, server health, and unread independent. Running is active but does not demand attention. Awaiting input, blocked, terminal, stale, offline, and unread states set attention without rewriting lifecycle. A successful valid snapshot removes archived or absent agents; transport failure preserves the last valid entities as offline.
+The adapter validates the complete server and agent arrays, including every lifecycle and current Tycho server status, before allocating or removing an assignment. One malformed row rejects the whole snapshot and preserves the last valid model and assignment store. `loading` maps to stale attention; `unauthorized` maps to offline attention. Running is active but does not demand attention. Awaiting input, blocked, terminal, stale, offline, and unread states set attention without rewriting lifecycle.
 
-The plugin persists only opaque UUID-to-pet-package/slot assignments and the last sanitized state. It updates a pet in place across reruns, terminal states, and stale snapshots. A valid snapshot that removes an entity releases its bubble and spawned window. Repeated revisions and plugin/adapter restarts restore persistent cues but do not replay terminal or unread reactions.
+The plugin persists only `assignment_revision` and opaque UUID-to-pet-package/slot assignments. Source revision, lifecycle, active, attention, unread, health, and transition history remain in the captured runtime instance and are discarded on unload. It updates a pet in place across reruns, terminal states, and stale snapshots. A valid snapshot that removes an entity releases its bubble and spawned window. Repeated revisions do not replay terminal or unread reactions; a restart restores cosmetic assignments and renders the first snapshot without a one-shot transition.
+
+The adapter halts automatic Tycho requests after the first confirmed HTTP 401. Restart it or call its in-process `reconfigure` seam with a complete safe origin/credential pair to resume. Network, 5xx, timeout, malformed, and oversized responses use deterministic exponential delays of 5, 10, 20, 40, then at most 60 seconds. The plugin independently backs off its loopback requests from 10 seconds to the same 60-second cap.
 
 Disable or unload the plugin before stopping OpenPets. Its explicit cleanup cancels polling, unregisters the refresh command, dismisses bubbles, clears status reactions, and closes every spawned pet. Stop the adapter separately. Delete its assignment-state file only if intentionally resetting stable identities.
 
@@ -53,6 +55,8 @@ npm run benchmark
 /usr/bin/time -lp node adapter/idle-resource-check.mjs
 ```
 
-The tests use the official `@open-pets/plugin-sdk/testing` harness and a real loopback HTTP server. They cover the five-pet cap, overflow, same-package and distinct-package spawns, lifecycle/attention/unread recognition, stable update/release, rerun, terminal, stale, archive, repeated snapshots, adapter and plugin restarts, transport loss, private assignment persistence, and cleanup.
+The 23 tests use the pinned official `@open-pets/plugin-sdk/testing` 3.3.0 harness and a real loopback HTTP server. They cover the five-pet cap, overflow, same-package and distinct-package spawns, lifecycle/attention/unread recognition, partial cues, stable update/release, rerun, terminal, stale, archive, repeated snapshots, adapter and plugin restarts, legacy-state migration, atomic malformed-row rejection, loading/unauthorized mapping, 401 latching, deterministic backoff, private cosmetic-only persistence, delayed-fetch unload, and cleanup.
+
+For the non-empty pinned-desktop check, run `npm run fixture:real-host` beside the pinned desktop with `OPENPETS_DEV_PLUGIN_PATHS` set to this plugin. The synthetic fixture exposes two running entities, changes both to partial, then removes both. A temporary installed test pet is required to exercise the spawned-window path; do not reuse a real OpenPets profile. The recorded run created two assignments, emitted one host-counted `waiting` reaction after the update, returned to zero assignments after release, and left the plugin enabled and unbroken with no SDK dispatch failure.
 
 See [the comparison evidence](../docs/openpets-comparison-prototype.md) for measured results and limitations.

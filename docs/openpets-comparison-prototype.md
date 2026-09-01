@@ -4,7 +4,7 @@ Evidence recorded on 2026-09-01 from macOS on the repository's clean Godot basel
 
 ## Result
 
-The standalone plugin boundary is sufficient. The prototype needed no OpenPets fork, OpenPets core change, Tycho change, or unsafe credential persistence. It recognizes all required conditions, preserves stable opaque pet assignments, caps the scene at five pets, reports overflow, and does not replay transitions on repeated or restarted snapshots.
+The standalone plugin boundary is sufficient. The prototype needed no OpenPets fork, OpenPets core change, Tycho change, or unsafe credential persistence. It recognizes all required conditions, preserves stable opaque pet assignments, caps the scene at five pets, reports overflow, and does not replay transitions on repeated snapshots or initial rendering after restart.
 
 OpenPets is materially quieter at idle but materially heavier in memory. Its separate pet windows and pinned bubbles also create more visual clutter than the single Godot strip. This experiment supports further OpenPets testing; it does not justify replacing the Godot baseline yet.
 
@@ -18,8 +18,10 @@ OpenPets is materially quieter at idle but materially heavier in memory. Its sep
 | Unread terminal | Mailbox cue independent of result | Terminal label with `unread`; one transition reaction only | SDK harness asserts `Succeeded · unread` and no replay |
 | Failure | Failed pose | Persistent `error` plus `Failed` | SDK harness asserts reaction and bubble |
 | Stale/offline | Frozen, desaturated scene | Lifecycle retained with `Data stale` or `Tycho offline` | Adapter and SDK tests assert preservation |
+| Loading/unauthorized server | Connecting/offline wrapper | `loading` becomes stale attention; `unauthorized` becomes offline attention | Contract fixtures assert lifecycle preservation and attention |
+| Partial | Partial pose | Persistent `waiting`, `Partial`, and one transition cue | SDK 3.3.0 harness asserts cue and no replay |
 
-The six target conditions remain textually distinct without exposing agent or project labels. Unread stays a boolean overlay instead of replacing lifecycle. Repeated snapshots, adapter restart, and plugin restart produce no terminal or unread replay.
+The target conditions remain textually distinct without exposing agent or project labels. Unread stays a boolean overlay instead of replacing lifecycle. Repeated snapshots produce no terminal or unread replay. On plugin restart, lifecycle history is intentionally absent: the first snapshot restores cosmetic assignments and persistent cues without treating existing terminal/unread state as a new transition.
 
 Godot renders all agents inside one 300 px bottom strip. OpenPets uses the default pet plus up to four independent always-on-top windows; up to four attention bubbles may be pinned at once. The plugin avoids bubbles for ordinary running and idle states, ranks attention before running/idle, and publishes `+N overflow`, but its worst-case footprint is still five windows and five state cues. That is a clear clutter regression against the shoreline composition.
 
@@ -62,14 +64,24 @@ cd openpets
 npm run benchmark
 ```
 
-Recorded output for 100 sanitized entities was 0.265 ms per adapter reconciliation, 0.01266 ms per unchanged plugin reconciliation, 24,866 bytes of persisted sanitized plugin state, and 63.9 MiB RSS for the Node benchmark process. This excludes the Electron host and therefore does not replace the full-host measurement above.
+Recorded exact-head output for 100 sanitized entities was 0.277 ms per adapter reconciliation, 0.01266 ms per unchanged plugin reconciliation, 7,026 bytes of persisted cosmetic assignment state, and 68.6 MiB RSS for the Node benchmark process. The five-second adapter-only resource check peaked at 55,607,296 bytes RSS. These Node checks exclude the Electron host and therefore do not replace the full-host measurement above.
+
+## Exact-head review evidence
+
+- `npm test`: 23/23 pass with the SDK harness pinned exactly to 3.3.0.
+- `npm audit --audit-level=low`: 0 vulnerabilities.
+- Research-pinned source CLI validator: pass. Research-pinned desktop manifest validator: pass. The published CLI 3.3.0 still rejects `network:local`, as documented under limitations.
+- Non-empty pinned desktop lifecycle: two sanitized assignments caused one default pet plus one successful `snoopy` spawn; running changed to partial and the host recorded one `waiting` reaction; removal returned persisted assignments to zero. The plugin stayed enabled and unbroken, and the host logged no SDK dispatch failure.
+- The non-empty run used only `adapter/real-host-lifecycle-fixture.mjs`, a random in-memory placeholder credential, synthetic opaque source rows, a temporary profile, and a temporary installed test pet. It contained no live Tycho secret or activity.
+- Malformed server/agent/status fixtures preserve the prior assignment map; delayed fetch plus unload produces no storage, pet, status, command, or schedule write after cleanup.
+- A repeat pinned-desktop launch left `ghostty` frontmost before and after; terminating the host and adapter left no matching process.
 
 ## Privacy and persistence evidence
 
 - The adapter binds only `127.0.0.1`, accepts only `GET /snapshot`, sets `Cache-Control: no-store`, and makes only authenticated `GET /servers/activity` calls.
 - Adapter output contains only schema/revision, aggregate counts/health, and opaque entity rows with lifecycle, active, attention, unread, and health.
 - Persisted adapter assignments contain SHA-256 composite-key digests and random UUIDs, never raw server or agent keys. The file is mode `0600` and atomically replaced.
-- Plugin storage contains only opaque assignment IDs, installed pet package IDs, slots, and the last sanitized state.
+- Plugin storage contains only `assignment_revision`, opaque assignment IDs, installed pet package IDs, and slots. Lifecycle, active, attention, unread, health, source revisions, and transition history are memory-only and cleared on unload.
 - The manifest declares one exact loopback host and no credential field. The plugin does not log data.
 
 ## Limitations
@@ -80,3 +92,4 @@ Recorded output for 100 sanitized entities was 0.265 ms per adapter reconciliati
 - OpenPets cannot dim arbitrary pets for stale/offline through the reaction API, so the prototype uses explicit text.
 - Resource and focus results cover one macOS session. Windows fullscreen, Linux Wayland, workspace changes, clicks, and sleep/wake still need manual target-platform testing.
 - The adapter currently accepts its credential only from process environment. An OS credential-store launcher would be required before production use.
+- After a confirmed 401 the adapter deliberately remains offline until process restart or explicit in-process reconfiguration. It does not expose remote reconfiguration over loopback.
