@@ -227,6 +227,23 @@ function offlineSnapshot(previous) {
   };
 }
 
+function staleSnapshot(previous) {
+  if (previous.health === "offline") return offlineSnapshot(previous);
+  const pets = previous.pets.map((entity) => ({ ...entity, health: "stale", attention: true }));
+  return {
+    schema_version: SNAPSHOT_SCHEMA_VERSION,
+    revision: snapshotRevision(pets, "stale"),
+    health: "stale",
+    counts: {
+      total: pets.length,
+      active: pets.filter((entity) => entity.active).length,
+      attention: pets.length,
+      unread: pets.filter((entity) => entity.unread).length,
+    },
+    pets,
+  };
+}
+
 export class TychoPoller {
   constructor({ origin, credential, store, fetchImpl = fetch, timeoutMs = REQUEST_TIMEOUT_MS }) {
     this.origin = origin;
@@ -282,7 +299,7 @@ export class TychoPoller {
       this.outcome = "success";
     } catch {
       this.outcome = "transient";
-      if (!preserveLastValid) this.snapshot = offlineSnapshot(this.snapshot);
+      this.snapshot = preserveLastValid ? staleSnapshot(this.snapshot) : offlineSnapshot(this.snapshot);
     } finally {
       clearTimeout(timer);
     }

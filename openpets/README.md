@@ -38,13 +38,13 @@ OpenPets SDK v3 limits a plugin to four spawned pets. This prototype uses the ex
 
 ## State behavior
 
-The adapter validates the complete server and agent arrays, including every lifecycle and current Tycho server status, before allocating or removing an assignment. One malformed row rejects the whole snapshot and preserves the last valid model and assignment store. `loading` maps to stale attention; `unauthorized` maps to offline attention. Running is active but does not demand attention. Awaiting input, blocked, terminal, stale, offline, and unread states set attention without rewriting lifecycle.
+The adapter validates the complete server and agent arrays, including every lifecycle and current Tycho server status, before allocating or removing an assignment. One malformed row rejects the whole snapshot and preserves the last valid model and assignment store. A successful response with an oversized body, invalid JSON, unsupported schema, or malformed row serves that preserved model as stale rather than leaving it online. `loading` maps to stale attention; `unauthorized` maps to offline attention. Running is active but does not demand attention. Awaiting input, blocked, terminal, stale, offline, and unread states set attention without rewriting lifecycle.
 
 The plugin persists only `assignment_revision` and opaque UUID-to-pet-package/slot assignments. Source revision, lifecycle, active, attention, unread, health, and transition history remain in the captured runtime instance and are discarded on unload. It updates a pet in place across reruns, terminal states, and stale snapshots. A valid snapshot that removes an entity releases its bubble and spawned window. Repeated revisions do not replay terminal or unread reactions; a restart restores cosmetic assignments and renders the first snapshot without a one-shot transition.
 
 The adapter halts automatic Tycho requests after the first confirmed HTTP 401. Restart it or call its in-process `reconfigure` seam with a complete safe origin/credential pair to resume. Network, 5xx, timeout, malformed, and oversized responses use deterministic exponential delays of 5, 10, 20, 40, then at most 60 seconds. The plugin independently backs off its loopback requests from 10 seconds to the same 60-second cap.
 
-Disable or unload the plugin before stopping OpenPets. Its explicit cleanup cancels polling, unregisters the refresh command, dismisses bubbles, clears status reactions, and closes every spawned pet. Stop the adapter separately. Delete its assignment-state file only if intentionally resetting stable identities.
+Disable or unload the plugin before stopping OpenPets. Its explicit cleanup first blocks new reconciliation work, cancels polling, and drains every admitted SDK operation. It then unregisters the refresh command, dismisses bubbles, clears status reactions, and closes every spawned pet, so no already-started SDK operation can commit after stop returns. Stop the adapter separately. Delete its assignment-state file only if intentionally resetting stable identities.
 
 ## Verification
 
@@ -55,7 +55,7 @@ npm run benchmark
 /usr/bin/time -lp node adapter/idle-resource-check.mjs
 ```
 
-The 23 tests use the pinned official `@open-pets/plugin-sdk/testing` 3.3.0 harness and a real loopback HTTP server. They cover the five-pet cap, overflow, same-package and distinct-package spawns, lifecycle/attention/unread recognition, partial cues, stable update/release, rerun, terminal, stale, archive, repeated snapshots, adapter and plugin restarts, legacy-state migration, atomic malformed-row rejection, loading/unauthorized mapping, 401 latching, deterministic backoff, private cosmetic-only persistence, delayed-fetch unload, and cleanup.
+The 26 tests use the pinned official `@open-pets/plugin-sdk/testing` 3.3.0 harness and a real loopback HTTP server. They cover the five-pet cap, overflow, same-package and distinct-package spawns, lifecycle/attention/unread recognition, partial cues, stable update/release, rerun, terminal, stale, archive, repeated snapshots, adapter and plugin restarts, legacy-state migration, atomic malformed-row rejection, loading/unauthorized mapping, stale serving for every successful invalid-response class, 401 latching, deterministic backoff, private cosmetic-only persistence, delayed-fetch unload, delayed SDK-write draining, and cleanup.
 
 For the non-empty pinned-desktop check, run `npm run fixture:real-host` beside the pinned desktop with `OPENPETS_DEV_PLUGIN_PATHS` set to this plugin. The synthetic fixture exposes two running entities, changes both to partial, then removes both. A temporary installed test pet is required to exercise the spawned-window path; do not reuse a real OpenPets profile. The recorded run created two assignments, emitted one host-counted `waiting` reaction after the update, returned to zero assignments after release, and left the plugin enabled and unbroken with no SDK dispatch failure.
 

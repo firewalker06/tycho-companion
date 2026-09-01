@@ -73,6 +73,14 @@ function isCurrent(instance) {
   return runtime === instance && !instance.stopped;
 }
 
+function trackWork(instance, operation) {
+  const work = operation();
+  instance.activeWork.add(work);
+  const finished = () => instance.activeWork.delete(work);
+  work.then(finished, finished);
+  return work;
+}
+
 function packageIds(config) {
   const input = typeof config?.petPackageIds === "string" ? config.petPackageIds : "snoopy";
   const ids = input.split(",").map((value) => value.trim()).filter(validPetPackageId).slice(0, MAX_VISIBLE_PETS);
@@ -296,12 +304,12 @@ async function reconcileValidated(instance, snapshot, force) {
   return { changed: true, overflow: Math.max(0, snapshot.pets.length - MAX_VISIBLE_PETS) };
 }
 
-export async function reconcileSnapshot(ctx, value, { force = false } = {}) {
+export function reconcileSnapshot(ctx, value, { force = false } = {}) {
   const instance = runtime;
-  if (!instance || instance.ctx !== ctx || !isCurrent(instance)) return { changed: false, overflow: 0 };
+  if (!instance || instance.ctx !== ctx || !isCurrent(instance)) return Promise.resolve({ changed: false, overflow: 0 });
   const snapshot = validateSnapshot(value);
-  if (!snapshot) throw new Error("Invalid sanitized adapter snapshot.");
-  return reconcileValidated(instance, snapshot, force);
+  if (!snapshot) return Promise.reject(new Error("Invalid sanitized adapter snapshot."));
+  return trackWork(instance, () => reconcileValidated(instance, snapshot, force));
 }
 
 async function scheduleNext(instance) {
@@ -312,9 +320,8 @@ async function scheduleNext(instance) {
   }
 }
 
-export async function poll(ctx, force = false, captured = runtime) {
-  const instance = captured;
-  if (!instance || instance.ctx !== ctx || !isCurrent(instance) || instance.polling) return;
+async function runPoll(instance, force) {
+  const ctx = instance.ctx;
   instance.polling = true;
   try {
     const response = await ctx.net.fetch(ADAPTER_SNAPSHOT_URL, { method: "GET", timeoutMs: 3_000 });
@@ -354,12 +361,19 @@ export async function poll(ctx, force = false, captured = runtime) {
   }
 }
 
+export function poll(ctx, force = false, captured = runtime) {
+  const instance = captured;
+  if (!instance || instance.ctx !== ctx || !isCurrent(instance) || instance.polling) return Promise.resolve();
+  return trackWork(instance, () => runPoll(instance, force));
+}
+
 async function cleanup() {
   const instance = runtime;
   if (!instance) return;
   instance.stopped = true;
   runtime = null;
   try { await instance.ctx.schedule.cancel(POLL_SCHEDULE_ID); } catch {}
+  await Promise.allSettled([...instance.activeWork]);
   try { await instance.ctx.commands.unregister("refresh"); } catch {}
   for (const id of [...instance.handles.keys()]) await releasePet(instance, id);
   try { await instance.ctx.pets.default.setStatusReaction(null); } catch {}
@@ -369,6 +383,20 @@ async function cleanup() {
   instance.assignmentState = emptyAssignments();
   instance.bubbles.clear();
   instance.handles.clear();
+  instance.activeWork.clear();
+}
+
+async function startRuntime(instance) {
+  const { ctx } = instance;
+  const stored = await ctx.storage.get(STORAGE_KEY);
+  if (!isCurrent(instance)) return;
+  instance.assignmentState = cleanAssignments(stored);
+  await ctx.commands.register(
+    { id: "refresh", title: "$t:command.refresh.title", description: "$t:command.refresh.description" },
+    () => poll(ctx, false, instance),
+  );
+  if (!isCurrent(instance)) return;
+  await poll(ctx, true, instance);
 }
 
 export function register(OpenPetsPlugin) {
@@ -385,20 +413,10 @@ export function register(OpenPetsPlugin) {
         polling: false,
         backoffMs: POLL_MS,
         spawnFailures: 0,
+        activeWork: new Set(),
       };
       runtime = instance;
-      const stored = await ctx.storage.get(STORAGE_KEY);
-      if (!isCurrent(instance)) return;
-      instance.assignmentState = cleanAssignments(stored);
-      await ctx.commands.register(
-        { id: "refresh", title: "$t:command.refresh.title", description: "$t:command.refresh.description" },
-        () => poll(ctx, false, instance),
-      );
-      if (!isCurrent(instance)) {
-        try { await ctx.commands.unregister("refresh"); } catch {}
-        return;
-      }
-      await poll(ctx, true, instance);
+      await trackWork(instance, () => startRuntime(instance));
     },
     async stop() {
       await cleanup();

@@ -118,23 +118,37 @@ test("malformed server or agent rows reject atomically and preserve assignments"
   assert.deepEqual(await sanitizeActivity(valid, store), first);
 });
 
-test("polling rejects a malformed successful response without replacing the last valid snapshot", async (t) => {
-  const { store } = await temporaryStore(t);
-  const responses = [
-    new Response(JSON.stringify(activity([server("s", [agent("a", "running")])])), { status: 200 }),
-    new Response(JSON.stringify(activity([server("s", [agent("a", "invented")])])), { status: 200 }),
+test("malformed successful responses preserve state and assignments but mark the snapshot stale", async (t) => {
+  const invalidResponses = [
+    () => new Response(JSON.stringify(activity([server("s", [agent("a", "invented")])])), { status: 200 }),
+    () => new Response(JSON.stringify({ schema_version: 99, servers: [] }), { status: 200 }),
+    () => new Response("not-json", { status: 200 }),
+    () => new Response("{}", { status: 200, headers: { "content-length": String(600 * 1024) } }),
   ];
-  const poller = new TychoPoller({
-    origin: "http://127.0.0.1:7373",
-    credential: randomUUID(),
-    store,
-    fetchImpl: async () => responses.shift(),
-  });
-  const valid = await poller.poll();
-  const assignments = [...store.assignments];
-  assert.deepEqual(await poller.poll(), valid);
-  assert.deepEqual([...store.assignments], assignments);
-  assert.equal(poller.outcome, "transient");
+  for (const invalidResponse of invalidResponses) {
+    const { store } = await temporaryStore(t);
+    const responses = [
+      new Response(JSON.stringify(activity([server("s", [agent("a", "running", { unread: true })])])), { status: 200 }),
+      invalidResponse(),
+    ];
+    const poller = new TychoPoller({
+      origin: "http://127.0.0.1:7373",
+      credential: randomUUID(),
+      store,
+      fetchImpl: async () => responses.shift(),
+    });
+    const valid = await poller.poll();
+    const assignments = [...store.assignments];
+    const degraded = await poller.poll();
+    assert.notEqual(degraded.revision, valid.revision);
+    assert.equal(degraded.health, "stale");
+    assert.equal(degraded.pets[0].health, "stale");
+    assert.equal(degraded.pets[0].lifecycle, "running");
+    assert.equal(degraded.pets[0].unread, true);
+    assert.equal(degraded.pets[0].attention, true);
+    assert.deepEqual([...store.assignments], assignments);
+    assert.equal(poller.outcome, "transient");
+  }
 });
 
 test("terminal, stale, rerun, archive, and cleanup have stable release semantics", async (t) => {
@@ -288,4 +302,30 @@ test("loopback server exposes only GET /snapshot and never returns its credentia
   assert.ok(!body.includes(credential));
   assert.equal((await fetch(`${base}/snapshot`, { method: "POST" })).status, 405);
   assert.equal((await fetch(`${base}/other`)).status, 404);
+});
+
+test("loopback serves a bounded stale snapshot after a malformed successful Tycho response", async (t) => {
+  const { filePath } = await temporaryStore(t);
+  const responses = [
+    new Response(JSON.stringify(activity([server("s", [agent("a", "running")])])), { status: 200 }),
+    new Response("not-json", { status: 200 }),
+  ];
+  const running = await startAdapter({
+    origin: "http://localhost:7373",
+    credential: randomUUID(),
+    stateFile: filePath,
+    port: 0,
+    fetchImpl: async () => responses.shift(),
+  });
+  t.after(() => running.close());
+  const assignments = [...running.poller.store.assignments];
+  await running.poller.poll();
+  const response = await fetch(`http://${ADAPTER_HOST}:${running.address.port}/snapshot`);
+  const served = await response.json();
+  assert.equal(served.health, "stale");
+  assert.equal(served.pets[0].health, "stale");
+  assert.equal(served.pets[0].lifecycle, "running");
+  assert.equal(served.pets[0].attention, true);
+  assert.deepEqual([...running.poller.store.assignments], assignments);
+  assert.ok(JSON.stringify(served).length < 2_000);
 });

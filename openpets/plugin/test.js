@@ -7,6 +7,7 @@ import {
   MAX_VISIBLE_PETS,
   POLL_SCHEDULE_ID,
   STORAGE_KEY,
+  poll,
   register,
   transientPollDelay,
   validateSnapshot,
@@ -231,7 +232,7 @@ test("a malformed adapter snapshot preserves the last valid model and assignment
   await h.stop();
 });
 
-test("unload during a delayed fetch cannot write, spawn, or reschedule after cleanup", async () => {
+test("unload drains a delayed fetch before cleanup and cannot write, spawn, or reschedule", async () => {
   const h = createTestHarness(register, { permissions: PERMISSIONS, config: { petPackageIds: "snoopy" }, nowMs: 1_000_000 });
   let releaseFetch;
   let markFetchStarted;
@@ -244,15 +245,70 @@ test("unload during a delayed fetch cannot write, spawn, or reschedule after cle
   };
   const starting = h.start();
   await fetchStarted;
-  await h.stop();
-  const statusCount = h.calls.status.length;
+  let stopped = false;
+  const stopping = h.stop().then(() => { stopped = true; });
+  await Promise.resolve();
+  assert.equal(stopped, false, "cleanup must wait for admitted fetch work");
   releaseFetch();
-  await starting;
+  await Promise.all([starting, stopping]);
   assert.equal(h.calls.storage.has(STORAGE_KEY), false);
   assert.equal(h.calls.spawnedPets.length, 0);
-  assert.equal(h.calls.status.length, statusCount);
   assert.equal(h.calls.schedules.size, 0);
   assert.equal(h.calls.commands.size, 0);
+});
+
+test("stop waits for a delayed SDK storage write and final cleanup wins", async () => {
+  const h = harnessFor(snapshot("first", [entity(1, "running"), entity(2, "idle")]));
+  await h.start();
+  const originalSet = h.ctx.storage.set;
+  let releaseWrite;
+  let markWriteStarted;
+  const writeStarted = new Promise((resolve) => { markWriteStarted = resolve; });
+  const delayedWrite = new Promise((resolve) => { releaseWrite = resolve; });
+  let stopReturned = false;
+  let committedAfterStop = false;
+  let writes = 0;
+  h.ctx.storage.set = async (...args) => {
+    markWriteStarted();
+    await delayedWrite;
+    if (stopReturned) committedAfterStop = true;
+    writes += 1;
+    return originalSet(...args);
+  };
+  h.net.mock(ADAPTER_SNAPSHOT_URL, { json: snapshot("second", [entity(1, "succeeded", { unread: true, attention: true }), entity(2, "idle")]) });
+  const polling = poll(h.ctx);
+  await writeStarted;
+  let stopped = false;
+  const stopping = h.stop().then(() => { stopped = true; stopReturned = true; });
+  await Promise.resolve();
+  assert.equal(stopped, false, "stop must remain pending while an SDK write is active");
+  releaseWrite();
+  await Promise.all([polling, stopping]);
+  const writesAtStop = writes;
+  await Promise.resolve();
+  assert.equal(committedAfterStop, false);
+  assert.equal(writes, writesAtStop, "no SDK write may commit after stop resolves");
+  assert.equal(h.calls.schedules.size, 0);
+  assert.equal(h.calls.commands.size, 0);
+  assert.ok(h.calls.bubbles.every((bubble) => bubble.dismissed));
+  assert.equal(h.calls.statusReactions.at(-1), null);
+});
+
+test("a degraded adapter snapshot marks prior data stale without changing cosmetic assignments", async () => {
+  const h = harnessFor(snapshot("live", [entity(1, "running"), entity(2, "idle")]));
+  await h.start();
+  const assignments = structuredClone(h.calls.storage.get(STORAGE_KEY));
+  const spawned = [...h.calls.spawnedPets];
+  h.net.mock(ADAPTER_SNAPSHOT_URL, { json: snapshot("degraded", [
+    entity(1, "running", { health: "stale", attention: true }),
+    entity(2, "idle", { health: "stale", attention: true }),
+  ], "stale") });
+  await h.clock.advance("5s");
+  assert.deepEqual(h.calls.storage.get(STORAGE_KEY), assignments);
+  assert.deepEqual(h.calls.spawnedPets, spawned);
+  assert.ok(h.calls.bubbles.some((bubble) => bubble.spec.text === "Data stale"));
+  assert.match(h.calls.status.at(-1).text, /Data stale/);
+  await h.stop();
 });
 
 test("network loss keeps the last sanitized model, marks it offline once, backs off, and cleans up", async () => {

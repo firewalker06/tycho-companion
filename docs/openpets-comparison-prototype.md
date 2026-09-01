@@ -23,7 +23,7 @@ OpenPets is materially quieter at idle but materially heavier in memory. Its sep
 
 The target conditions remain textually distinct without exposing agent or project labels. Unread stays a boolean overlay instead of replacing lifecycle. Repeated snapshots produce no terminal or unread replay. On plugin restart, lifecycle history is intentionally absent: the first snapshot restores cosmetic assignments and persistent cues without treating existing terminal/unread state as a new transition.
 
-Godot renders all agents inside one 300 px bottom strip. OpenPets uses the default pet plus up to four independent always-on-top windows; up to four attention bubbles may be pinned at once. The plugin avoids bubbles for ordinary running and idle states, ranks attention before running/idle, and publishes `+N overflow`, but its worst-case footprint is still five windows and five state cues. That is a clear clutter regression against the shoreline composition.
+Godot renders all agents inside one 300 px bottom strip. OpenPets uses the default pet plus up to four independent always-on-top windows; up to five attention bubbles may be pinned at once. The plugin avoids bubbles for ordinary running and idle states, ranks attention before running/idle, and publishes `+N overflow`, but its worst-case footprint is still five windows and five state cues. That is a clear clutter regression against the shoreline composition.
 
 ## CPU, memory, and focus
 
@@ -64,16 +64,17 @@ cd openpets
 npm run benchmark
 ```
 
-Recorded exact-head output for 100 sanitized entities was 0.277 ms per adapter reconciliation, 0.01266 ms per unchanged plugin reconciliation, 7,026 bytes of persisted cosmetic assignment state, and 68.6 MiB RSS for the Node benchmark process. The five-second adapter-only resource check peaked at 55,607,296 bytes RSS. These Node checks exclude the Electron host and therefore do not replace the full-host measurement above.
+Recorded exact-head output for 100 sanitized entities was 0.279 ms per adapter reconciliation, 0.01251 ms per unchanged plugin reconciliation, 7,026 bytes of persisted cosmetic assignment state, and 64.1 MiB RSS for the Node benchmark process. The five-second adapter-only resource check passed its 96 MiB ceiling. These Node checks exclude the Electron host and therefore do not replace the full-host measurement above.
 
 ## Exact-head review evidence
 
-- `npm test`: 23/23 pass with the SDK harness pinned exactly to 3.3.0.
+- `npm test`: 26/26 pass with the SDK harness pinned exactly to 3.3.0.
 - `npm audit --audit-level=low`: 0 vulnerabilities.
 - Research-pinned source CLI validator: pass. Research-pinned desktop manifest validator: pass. The published CLI 3.3.0 still rejects `network:local`, as documented under limitations.
 - Non-empty pinned desktop lifecycle: two sanitized assignments caused one default pet plus one successful `snoopy` spawn; running changed to partial and the host recorded one `waiting` reaction; removal returned persisted assignments to zero. The plugin stayed enabled and unbroken, and the host logged no SDK dispatch failure.
 - The non-empty run used only `adapter/real-host-lifecycle-fixture.mjs`, a random in-memory placeholder credential, synthetic opaque source rows, a temporary profile, and a temporary installed test pet. It contained no live Tycho secret or activity.
-- Malformed server/agent/status fixtures preserve the prior assignment map; delayed fetch plus unload produces no storage, pet, status, command, or schedule write after cleanup.
+- Malformed server/agent/status fixtures and successful oversized, invalid-JSON, unsupported-schema, and malformed responses preserve the prior assignment map. The latter responses serve the preserved lifecycle as stale, and the plugin renders that degraded state without respawning or changing cosmetic assignments.
+- Delayed fetch and delayed `storage.set` unload regressions prove cleanup blocks new work, waits for admitted SDK operations, and allows no SDK commit after stop returns.
 - A repeat pinned-desktop launch left `ghostty` frontmost before and after; terminating the host and adapter left no matching process.
 
 ## Privacy and persistence evidence
