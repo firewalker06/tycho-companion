@@ -1,9 +1,9 @@
 class_name DesktopLayout
 extends RefCounted
 
-## The compact strip is always the bottom-most 160 px. An overlay grows the
+## The compact strip is always the bottom-most 300 px. An overlay grows the
 ## window upward above it, while the native bottom edge remains fixed.
-const STRIP_HEIGHT := 160
+const STRIP_HEIGHT := 300
 const CONTROL_MARGIN := 0
 const CONTROL_HEIGHT := 34
 const SETTINGS_HEIGHT := 228
@@ -52,6 +52,31 @@ static func input_polygon(viewport_width: float, kind: String, control_width: fl
 		Vector2(control.position.x, control.end.y),
 		Vector2(control.position.x, control.position.y),
 		Vector2(overlay.position.x, overlay.end.y),
+	])
+
+static func platform_input_polygon(viewport_width: float, kind: String, control_width: float, platform_name: String = OS.get_name()) -> PackedVector2Array:
+	if platform_name != "Windows":
+		return input_polygon(viewport_width, kind, control_width)
+	# Godot implements this polygon as the native paint region on Windows, so
+	# pixels outside it are not merely click-through: they are invisible. Include
+	# every painted pixel there, accepting that the ambient strip intercepts
+	# clicks until Godot exposes cross-process passthrough independently.
+	var strip := strip_rect(viewport_width, kind)
+	if kind.is_empty():
+		return PackedVector2Array([
+			strip.position,
+			Vector2(strip.end.x, strip.position.y),
+			strip.end,
+			Vector2(strip.position.x, strip.end.y),
+		])
+	var overlay := overlay_rect(viewport_width, kind)
+	return PackedVector2Array([
+		overlay.position,
+		Vector2(viewport_width, overlay.position.y),
+		Vector2(viewport_width, strip.end.y),
+		Vector2(0.0, strip.end.y),
+		strip.position,
+		Vector2(overlay.position.x, strip.position.y),
 	])
 
 static func passthrough_polygon(viewport_width: float, kind: String, control_width: float) -> PackedVector2Array:

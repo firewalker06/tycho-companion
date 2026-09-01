@@ -3,18 +3,13 @@ extends Node2D
 const StateMapperScript := preload("res://state_mapper.gd")
 const DesktopLayoutScript := preload("res://desktop_layout.gd")
 const DebugSystemScript := preload("res://debug_system.gd")
-const WORKSHOP := preload("res://assets/coastal-workshop.png")
-const CARETAKER := preload("res://assets/caretaker-poses.png")
-
-# The full-width x=0..1774, y=400..784 source region retains all three lit
-# work bays. It is intentionally fitted to the compact strip, with no bars.
-const WORKSHOP_REGION := Rect2(0, 400, 1774, 384)
-const CARETAKER_CELL := Vector2(512, 512)
-const CONTROL_WIDTH := 350.0
+const CompanionSceneScript := preload("res://companion_scene.gd")
+const CONTROL_WIDTH := 394.0
 
 @onready var client: Node = $ConnectionClient
 
 var tide := 0.0
+var animation_accumulator := 0.0
 var agents: Array[Dictionary] = []
 var last_refresh := "Never"
 var overlay_kind := ""
@@ -34,12 +29,17 @@ var debug_agents: Array[Dictionary] = []
 var snapshot_busy := false
 var last_snapshot_path := ""
 var last_snapshot_error := OK
+var companion_scene: Node2D
+var quit_pending := false
 
 func _ready() -> void:
+	get_tree().auto_accept_quit = false
+	get_viewport().transparent_bg = true
 	get_window().transparent = true
 	get_window().borderless = true
 	get_window().always_on_top = false
 	_apply_window_layout()
+	_build_companion_scene()
 	_build_controls()
 	client.status_changed.connect(_on_connection_status_changed)
 	client.snapshot_received.connect(_on_snapshot_received)
@@ -47,14 +47,22 @@ func _ready() -> void:
 	_on_connection_status_changed(client.connection_status(), client.connection_message())
 	get_viewport().size_changed.connect(_on_viewport_size_changed)
 	call_deferred("_update_passthrough")
-	queue_redraw()
+	_sync_companion_scene()
 	if OS.get_cmdline_user_args().has("--debug-render-snapshot"):
 		call_deferred("_run_cli_render_snapshot")
+
+func _notification(what: int) -> void:
+	if what == NOTIFICATION_WM_CLOSE_REQUEST:
+		_quit()
 
 func _process(delta: float) -> void:
 	if _has_motion():
 		tide += delta
-		queue_redraw()
+		animation_accumulator += delta
+		if animation_accumulator >= 1.0 / 12.0:
+			animation_accumulator = fmod(animation_accumulator, 1.0 / 12.0)
+			companion_scene.tide = tide
+			companion_scene.queue_redraw()
 
 func _input(event: InputEvent) -> void:
 	if event.is_action_pressed("ui_cancel"):
@@ -66,18 +74,33 @@ func _apply_window_layout() -> void:
 	var usable := DisplayServer.screen_get_usable_rect()
 	var height := DesktopLayoutScript.window_height(overlay_kind)
 	# Keep the canvas' logical size in lockstep with the native window. The
-	# project has a 160 px compact default, so changing window size alone would
-	# otherwise leave controls laid out in a clipped 160 px viewport.
+	# project has a 300 px compact default, so changing window size alone would
+	# otherwise leave controls laid out in a clipped 300 px viewport.
 	get_window().content_scale_size = Vector2i(usable.size.x, height)
 	get_window().size = Vector2i(usable.size.x, height)
 	get_window().position = DesktopLayoutScript.bottom_anchored_position(usable, height)
+	if companion_scene != null:
+		companion_scene.overlay_kind = overlay_kind
+		companion_scene.queue_redraw()
+
+func _build_companion_scene() -> void:
+	# Keep ambient art on an explicit canvas. Windows reliably composites the
+	# CanvasLayer used by the controls, while the implicit root canvas can vanish
+	# in a transparent borderless window after its startup resize.
+	var ambient_layer := CanvasLayer.new()
+	ambient_layer.name = "AmbientLayer"
+	ambient_layer.layer = -10
+	add_child(ambient_layer)
+	companion_scene = CompanionSceneScript.new()
+	companion_scene.name = "CompanionScene"
+	ambient_layer.add_child(companion_scene)
 
 func _on_viewport_size_changed() -> void:
 	if control_area == null:
 		return
 	_layout_controls()
 	call_deferred("_update_passthrough")
-	queue_redraw()
+	companion_scene.queue_redraw()
 
 func _panel_style(color: Color) -> StyleBoxFlat:
 	var style := StyleBoxFlat.new()
@@ -116,7 +139,7 @@ func _build_controls() -> void:
 	connection_label.clip_text = true
 	connection_label.add_theme_color_override("font_color", Color("a9ddd2"))
 	row.add_child(connection_label)
-	for details in [["Settings", "Configure Tycho origin and token"], ["Inspect", "Show compact diagnostics"], ["Debug", "Test connection and rendering"], ["Quit", "Quit Tycho Companion"]]:
+	for details in [["Settings", "Configure Tycho origin and token"], ["Inspect", "Show compact diagnostics"], ["Debug", "Test connection and rendering"], ["Save & Quit", "Preserve the protected token and quit safely"]]:
 		var button := Button.new()
 		button.text = details[0]
 		button.tooltip_text = details[1]
@@ -125,7 +148,7 @@ func _build_controls() -> void:
 			"Settings": button.pressed.connect(_toggle_overlay.bind("settings"))
 			"Inspect": button.pressed.connect(_toggle_overlay.bind("inspect"))
 			"Debug": button.pressed.connect(_toggle_overlay.bind("debug"))
-			"Quit": button.pressed.connect(_quit)
+			"Save & Quit": button.pressed.connect(_quit)
 		row.add_child(button)
 	_build_settings(layer)
 	_build_inspect(layer)
@@ -165,11 +188,11 @@ func _build_settings(layer: CanvasLayer) -> void:
 	origin_field.text = client.initial_origin()
 	box.add_child(origin_field)
 	var token_label := Label.new()
-	token_label.text = "Bearer token (memory only)"
+	token_label.text = "Bearer token (secured by your Windows account)"
 	box.add_child(token_label)
 	token_field = LineEdit.new()
 	token_field.secret = true
-	token_field.placeholder_text = "Token is never saved"
+	token_field.placeholder_text = "Saved token active — enter only to replace" if client.has_saved_credential() else "Saved securely after connecting"
 	box.add_child(token_field)
 	var actions := HBoxContainer.new()
 	box.add_child(actions)
@@ -242,13 +265,13 @@ func _connect() -> void:
 		settings_state.text = str(result.error)
 		return
 	token_field.clear() # The client is the only in-memory owner after this point.
-	settings_state.text = "Connecting…"
+	settings_state.text = "Connecting… Token secured." if result.credential_saved else "Connecting… %s" % result.warning
 	_update_inspect_text()
 
 func _disconnect() -> void:
-	client.disconnect_live()
+	var result: Dictionary = client.disconnect_live()
 	token_field.clear()
-	settings_state.text = "Disconnected. No token is retained."
+	settings_state.text = "Disconnected. The saved token was removed." if result.ok else "Disconnected, but the saved token could not be removed.\n%s" % result.message
 	_update_inspect_text()
 
 func _toggle_overlay(kind: String) -> void:
@@ -256,7 +279,9 @@ func _toggle_overlay(kind: String) -> void:
 	settings_panel.visible = overlay_kind == "settings"
 	inspect_panel.visible = overlay_kind == "inspect"
 	debug_panel.visible = overlay_kind == "debug"
-	if overlay_kind == "settings": settings_state.text = client.connection_message()
+	if overlay_kind == "settings":
+		settings_state.text = "%s\n%s" % [client.connection_message(), client.credential_message()]
+		token_field.placeholder_text = "Saved token active — enter only to replace" if client.has_saved_credential() else "Saved securely after connecting"
 	if overlay_kind == "inspect": _update_inspect_text()
 	_apply_window_layout()
 	call_deferred("_layout_controls")
@@ -273,7 +298,15 @@ func _hide_overlays() -> void:
 	call_deferred("_update_passthrough")
 
 func _quit() -> void:
-	client.disconnect_live()
+	if quit_pending:
+		return
+	var save_result: Dictionary = client.prepare_for_shutdown()
+	if not save_result.ok:
+		_toggle_overlay("settings")
+		settings_state.text = "Could not save the token, so Tycho Companion remains open.\n%s" % save_result.message
+		return
+	quit_pending = true
+	client.disconnect_live(false)
 	get_tree().quit()
 
 func _on_connection_status_changed(status: String, message: String) -> void:
@@ -283,9 +316,9 @@ func _on_connection_status_changed(status: String, message: String) -> void:
 		last_refresh = "Never"
 	if status == "retrying":
 		for agent in agents: agent.stale = true
-	if overlay_kind == "settings": settings_state.text = message
+	if overlay_kind == "settings": settings_state.text = "%s\n%s" % [message, client.credential_message()]
 	_update_inspect_text()
-	queue_redraw()
+	_sync_companion_scene()
 
 func _on_snapshot_received(activity: Dictionary, _resources: Dictionary, refreshed_at: String) -> void:
 	agents.clear()
@@ -293,7 +326,7 @@ func _on_snapshot_received(activity: Dictionary, _resources: Dictionary, refresh
 		agents.append(StateMapperScript.normalize_agent(raw))
 	last_refresh = refreshed_at
 	_update_inspect_text()
-	queue_redraw()
+	_sync_companion_scene()
 
 func _test_connection() -> void:
 	debug_text.text = "Testing connection…"
@@ -316,15 +349,20 @@ func _test_rendering() -> void:
 		debug_agents.clear()
 		render_test_button.text = "Test rendering"
 		debug_text.text = "Synthetic render preview stopped; live rendering restored."
-		queue_redraw()
+		_sync_companion_scene()
 		return
-	var report := DebugSystemScript.render_test_report(WORKSHOP.get_size(), CARETAKER.get_size(), WORKSHOP_REGION, Vector2i(CARETAKER_CELL))
+	var report := DebugSystemScript.render_test_report(
+		CompanionSceneScript.WORKSHOP.get_size(),
+		CompanionSceneScript.CARETAKER.get_size(),
+		CompanionSceneScript.WORKSHOP_REGION,
+		Vector2i(CompanionSceneScript.CARETAKER_CELL),
+	)
 	debug_render_active = report.ok
 	debug_agents = DebugSystemScript.render_fixture() if report.ok else []
 	if report.ok:
 		render_test_button.text = "Return to live rendering"
 	debug_text.text = "%s\nPreview: %s" % [report.message, ", ".join(report.states)]
-	queue_redraw()
+	_sync_companion_scene()
 
 func _snapshot_rendering() -> void:
 	if snapshot_busy:
@@ -333,7 +371,7 @@ func _snapshot_rendering() -> void:
 	debug_text.text = "Capturing a clean compact frame…"
 	_hide_overlays()
 	control_area.hide()
-	queue_redraw()
+	_sync_companion_scene()
 	await get_tree().process_frame
 	# Flush synchronously so capture does not depend on a desktop compositor or
 	# frame_post_draw timing. A truly headless dummy renderer has no texture; the
@@ -349,8 +387,11 @@ func _snapshot_rendering() -> void:
 	var relative_path := "%s/%s" % [directory, DebugSystemScript.snapshot_filename(timestamp)]
 	var save_error := ERR_UNAVAILABLE
 	if image != null and not image.is_empty():
-		var directory_error := DirAccess.make_dir_recursive_absolute(absolute_directory)
-		save_error = directory_error if directory_error != OK else image.save_png(relative_path)
+		if not DebugSystemScript.snapshot_has_visible_scene(image):
+			save_error = ERR_INVALID_DATA
+		else:
+			var directory_error := DirAccess.make_dir_recursive_absolute(absolute_directory)
+			save_error = directory_error if directory_error != OK else image.save_png(relative_path)
 	last_snapshot_path = ProjectSettings.globalize_path(relative_path) if save_error == OK else ""
 	last_snapshot_error = save_error
 	control_area.show()
@@ -377,7 +418,7 @@ func _run_cli_render_snapshot() -> void:
 
 func _update_inspect_text() -> void:
 	if inspect_text == null: return
-	var lines := ["Tycho Inspector", "Connection: %s" % client.connection_status(), "Status: %s" % client.connection_message(), "Last refresh: %s" % last_refresh]
+	var lines := ["Tycho Inspector", "Connection: %s" % client.connection_status(), "Status: %s" % client.connection_message(), "Credential: %s" % client.credential_message(), "Last refresh: %s" % last_refresh]
 	if agents.is_empty():
 		lines.append("No live agents available.")
 	else:
@@ -386,41 +427,15 @@ func _update_inspect_text() -> void:
 	inspect_text.text = "\n".join(lines)
 
 func _has_motion() -> bool:
-	if debug_render_active:
-		return false
-	for agent in agents:
-		if StateMapperScript.effective_state(agent) == "running" and not agent.stale: return true
-	return false
+	return not (debug_agents if debug_render_active else agents).is_empty()
+
+func _sync_companion_scene() -> void:
+	if companion_scene == null:
+		return
+	companion_scene.overlay_kind = overlay_kind
+	companion_scene.tide = tide
+	companion_scene.replace_agents(debug_agents if debug_render_active else agents)
 
 func _update_passthrough() -> void:
 	get_window().mouse_passthrough = false
-	DisplayServer.window_set_mouse_passthrough(DesktopLayoutScript.input_polygon(get_viewport_rect().size.x, overlay_kind, CONTROL_WIDTH))
-
-func _draw() -> void:
-	var viewport := get_viewport_rect()
-	var strip := DesktopLayoutScript.strip_rect(viewport.size.x, overlay_kind)
-	draw_texture_rect_region(WORKSHOP, strip, WORKSHOP_REGION)
-	var visible_agents := debug_agents if debug_render_active else agents
-	if visible_agents.is_empty(): return
-	var gap := viewport.size.x / float(visible_agents.size() + 1)
-	for index in visible_agents.size():
-		_draw_caretaker(Vector2(gap * float(index + 1), strip.position.y + 126.0), visible_agents[index])
-
-func _draw_caretaker(position: Vector2, agent: Dictionary) -> void:
-	var state := StateMapperScript.effective_state(agent)
-	var cell := Vector2(StateMapperScript.caretaker_pose_cell(state, agent.stale))
-	var bob := sin(tide * 1.35 + position.x * 0.01) * 2.0 if state == "running" and not agent.stale else 0.0
-	var target := Rect2(position - Vector2(45, 92) + Vector2(0, bob), Vector2(90, 90))
-	var source := Rect2(cell * CARETAKER_CELL, CARETAKER_CELL)
-	var tint := Color("ffffff") if not agent.stale else Color("82939a")
-	draw_texture_rect_region(CARETAKER, target, source, tint)
-	var cue := _cue_color(state)
-	draw_circle(position + Vector2(37, -72), 5, cue)
-	if agent.unread: draw_rect(Rect2(position + Vector2(-47, -59), Vector2(10, 8)), Color("f2b948"))
-
-func _cue_color(state: String) -> Color:
-	match state:
-		"idle", "running": return Color("4cb5ae")
-		"awaiting-input", "succeeded": return Color("e5a942")
-		"blocked", "failed": return Color("c95f58")
-		_: return Color("8c9595")
+	DisplayServer.window_set_mouse_passthrough(DesktopLayoutScript.platform_input_polygon(get_viewport_rect().size.x, overlay_kind, CONTROL_WIDTH))

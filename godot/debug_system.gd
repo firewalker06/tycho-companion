@@ -49,3 +49,19 @@ static func render_test_report(workshop_size: Vector2i, caretaker_size: Vector2i
 static func snapshot_filename(timestamp: String) -> String:
 	var safe := timestamp.replace(":", "-").replace(" ", "T")
 	return "tycho-companion-%s.png" % safe
+
+static func snapshot_has_visible_scene(image: Image) -> bool:
+	if image == null or image.is_empty():
+		return false
+	var visible_samples := 0
+	var columns := 32
+	var rows := 8
+	for row in rows:
+		var sample_y := mini(image.get_height() - 1, int((float(row) + 0.5) * image.get_height() / rows))
+		for column in columns:
+			var sample_x := mini(image.get_width() - 1, int((float(column) + 0.5) * image.get_width() / columns))
+			if image.get_pixel(sample_x, sample_y).a > 0.5:
+				visible_samples += 1
+	# A centered transparent cutout need not cover the viewport edges, but a
+	# handful of opaque samples distinguishes it sharply from the blank-window bug.
+	return visible_samples >= 8

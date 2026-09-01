@@ -22,7 +22,6 @@ static func normalize_agent(raw: Dictionary) -> Dictionary:
 		"awaiting_input": raw.get("awaiting_input", false) == true,
 		"blocked": raw.get("blocked", false) == true,
 		"stale": raw.get("stale", false) == true or raw.get("offline", false) == true or raw.get("server_status", "") in ["offline", "stale"],
-		"prompt_queue_count": raw.get("prompt_queue_count", null),
 	}
 
 static func flatten_activity(activity: Dictionary) -> Array[Dictionary]:
@@ -80,7 +79,7 @@ static func visual_intent(raw: Dictionary) -> Dictionary:
 		"idle": "rest", "running": "workbench", "awaiting-input": "question-lantern", "blocked": "closed-gate",
 		"succeeded": "warm-lamp", "failed": "rain-cloud", "partial": "cracked-sign", "stopped": "stopped-tool",
 	}.get(state, "rest")
-	return {"id": "%s/%s" % [agent.server, agent.key], "cue": cue, "unread": agent.unread, "stale": agent.stale, "queue_count": agent.prompt_queue_count}
+	return {"id": "%s/%s" % [agent.server, agent.key], "cue": cue, "unread": agent.unread, "stale": agent.stale}
 
 static func is_safe_origin(value: String) -> bool:
 	var origin := parse_origin(value)

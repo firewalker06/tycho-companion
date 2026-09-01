@@ -2,9 +2,11 @@ class_name ConnectionClient
 extends Node
 
 const StateMapperScript := preload("res://state_mapper.gd")
+const CredentialStoreScript := preload("res://credential_store.gd")
 
-## Read-only Tycho transport. Tokens live only in this node's private field and are
-## deliberately excluded from signals, snapshots, persisted settings, and errors.
+## Read-only Tycho transport. On Windows, tokens are persisted only as a
+## current-user DPAPI ciphertext. Plaintext remains private to this node and is
+## excluded from signals, snapshots, config files, and errors.
 
 signal status_changed(status: String, message: String)
 signal snapshot_received(activity: Dictionary, resources: Dictionary, refreshed_at: String)
@@ -20,6 +22,9 @@ var origin := ""
 var _token := ""
 var _status := "setup"
 var _message := "No Tycho connection configured"
+var _credential_message := "No saved token."
+var _credential_saved := false
+var _token_can_persist := true
 var _generation := 0
 var _retry_count := 0
 var _next_refresh_at := 0
@@ -30,17 +35,29 @@ var _connection_test_generation := 0
 var _connection_test_pending := 0
 var _connection_test_results: Dictionary = {}
 var _connection_test_requests: Array[HTTPRequest] = []
+var settings_path := SETTINGS_PATH
+var credential_is_supported: Callable = CredentialStoreScript.is_supported
+var credential_protect: Callable = CredentialStoreScript.protect
+var credential_unprotect: Callable = CredentialStoreScript.unprotect
 
 func _ready() -> void:
-	_load_origin()
-	var env_origin := OS.get_environment("TYCHO_ORIGIN").strip_edges()
-	var env_token := OS.get_environment("TYCHO_TOKEN")
-	if not env_origin.is_empty() and StateMapperScript.is_safe_origin(env_origin):
-		origin = env_origin
+	_load_configuration()
+	_apply_environment_configuration(OS.get_environment("TYCHO_ORIGIN"), OS.get_environment("TYCHO_TOKEN"))
+	if not origin.is_empty() and not _token.is_empty():
+		_start_live_connection()
+
+func _apply_environment_configuration(env_origin: String, env_token: String) -> void:
+	var clean_env_origin := env_origin.strip_edges()
+	if not clean_env_origin.is_empty() and StateMapperScript.is_safe_origin(clean_env_origin) and clean_env_origin != origin:
+		origin = clean_env_origin
+		_token = ""
+		_credential_saved = false
+		_credential_message = "The saved token belongs to a different origin."
 	if not env_token.is_empty():
 		_token = env_token
-	if not origin.is_empty() and not _token.is_empty():
-		connect_live(origin, _token)
+		_credential_saved = false
+		_token_can_persist = false
+		_credential_message = "Environment token active; it will not be saved."
 
 func _process(_delta: float) -> void:
 	if has_live_configuration() and (_status == "connected" or _status == "retrying") and Time.get_ticks_msec() >= _next_refresh_at:
@@ -58,30 +75,58 @@ func connection_status() -> String:
 func connection_message() -> String:
 	return _message
 
+func credential_message() -> String:
+	return _credential_message
+
+func has_saved_credential() -> bool:
+	return _credential_saved
+
 func connect_live(next_origin: String, next_token: String) -> Dictionary:
 	var clean_origin := next_origin.strip_edges()
 	if not StateMapperScript.is_safe_origin(clean_origin):
 		return {"ok": false, "error": "Use localhost, 127.0.0.1, or a single-label/.ts.net HTTPS Tycho origin."}
-	if next_token.strip_edges().is_empty():
-		return {"ok": false, "error": "A bearer token is required."}
+	var selected_token := select_token(next_token, _token, clean_origin, origin)
+	if selected_token.is_empty():
+		return {"ok": false, "error": "A bearer token is required when connecting to a different origin."}
 	_cancel_connection_test()
 	origin = clean_origin
-	_token = next_token
-	_persist_origin()
+	_token = selected_token
+	_token_can_persist = true
+	var credential_result := _persist_configuration()
+	_start_live_connection()
+	return {
+		"ok": true,
+		"credential_saved": credential_result.ok,
+		"warning": "" if credential_result.ok else credential_result.message,
+	}
+
+func _start_live_connection() -> void:
 	_retry_count = 0
 	_generation += 1
 	_refresh_generation(_generation)
-	return {"ok": true}
 
-func disconnect_live() -> void:
+func prepare_for_shutdown() -> Dictionary:
+	## An explicit save barrier for Quit and native window-close requests. A
+	## credential that is already saved needs no rewrite; a previous transient
+	## failure gets one synchronous retry before the app is allowed to exit.
+	if _token.is_empty() or _credential_saved or not _token_can_persist or not credential_is_supported.call():
+		return {"ok": true, "message": _credential_message}
+	return _persist_configuration()
+
+func disconnect_live(forget_saved: bool = true) -> Dictionary:
 	_cancel_connection_test()
 	_generation += 1
 	_token = ""
+	_token_can_persist = true
 	_retry_count = 0
 	_pending = 0
 	_activity = {}
 	_resources = {}
-	_set_status("setup", "Disconnected. Configure Tycho to show live activity.")
+	var forget_result := {"ok": true, "message": "Saved token preserved."}
+	if forget_saved:
+		forget_result = _forget_saved_token()
+	_set_status("setup", "Disconnected. Configure Tycho to show live activity." if forget_result.ok else "Disconnected, but Windows could not remove the saved token.")
+	return forget_result
 
 func refresh() -> void:
 	if not has_live_configuration() or _pending > 0:
@@ -233,21 +278,77 @@ func _generic_http_error(result: int, response_code: int) -> String:
 		return "Tycho rejected the credentials."
 	return "Tycho returned HTTP %d." % response_code
 
-func _load_origin() -> void:
+func _load_configuration() -> void:
 	var settings := ConfigFile.new()
-	if settings.load(SETTINGS_PATH) == OK:
+	if settings.load(settings_path) == OK:
 		var saved_origin := str(settings.get_value("connection", "origin", ""))
 		if StateMapperScript.is_safe_origin(saved_origin):
 			origin = saved_origin
+		var protected_token := str(settings.get_value("connection", "protected_token", ""))
+		var protected_origin := str(settings.get_value("connection", "protected_token_origin", saved_origin))
+		if not protected_token.is_empty() and protected_origin == saved_origin and not origin.is_empty():
+			var result: Dictionary = credential_unprotect.call(protected_token, protected_origin)
+			if result.ok:
+				_token = result.value
+				_credential_saved = true
+				_credential_message = "Saved token loaded from Windows protection."
+			else:
+				_credential_message = str(result.message)
 
-func _persist_origin() -> void:
+func _persist_configuration() -> Dictionary:
 	var settings := ConfigFile.new()
+	settings.load(settings_path)
+	if not credential_is_supported.call():
+		settings.set_value("connection", "origin", origin)
+		settings.save(settings_path)
+		_credential_saved = false
+		_credential_message = "Secure token storage is unavailable on this platform."
+		return {"ok": false, "message": "The origin was saved, but secure token storage is available only in the Windows build."}
+	var result: Dictionary = credential_protect.call(_token, origin)
+	if not result.ok:
+		_credential_saved = false
+		_credential_message = "%s The previous saved token was retained." % str(result.message)
+		return {"ok": false, "message": _credential_message}
 	settings.set_value("connection", "origin", origin)
-	settings.save(SETTINGS_PATH)
+	settings.set_value("connection", "protected_token", result.value)
+	settings.set_value("connection", "protected_token_origin", origin)
+	var save_error := settings.save(settings_path)
+	if save_error != OK:
+		_credential_saved = false
+		_credential_message = "The protected token could not be written to app data."
+		return {"ok": false, "message": "Windows protected the token, but the app could not save its encrypted value."}
+	_credential_saved = true
+	_credential_message = "Saved token protected for the current Windows account."
+	return {"ok": true, "message": "Token secured for the current Windows account."}
+
+func _forget_saved_token() -> Dictionary:
+	var settings := ConfigFile.new()
+	var load_error := settings.load(settings_path)
+	if load_error == ERR_FILE_NOT_FOUND:
+		_credential_saved = false
+		_credential_message = "No saved token."
+		return {"ok": true, "message": _credential_message}
+	if load_error != OK:
+		_credential_message = "The saved token could not be removed from app data."
+		return {"ok": false, "message": _credential_message}
+	settings.erase_section_key("connection", "protected_token")
+	settings.erase_section_key("connection", "protected_token_origin")
+	var save_error := settings.save(settings_path)
+	if save_error != OK:
+		_credential_message = "The saved token could not be removed from app data."
+		return {"ok": false, "message": _credential_message}
+	_credential_saved = false
+	_credential_message = "No saved token."
+	return {"ok": true, "message": _credential_message}
 
 static func authorization_headers(token: String) -> PackedStringArray:
 	# Keep construction here: callers receive headers, never a token-bearing request model.
 	return PackedStringArray(["Authorization: Bearer " + token])
+
+static func select_token(entered_token: String, saved_token: String, next_origin: String = "", current_origin: String = "") -> String:
+	if not entered_token.strip_edges().is_empty():
+		return entered_token
+	return saved_token if next_origin == current_origin else ""
 
 static func redact_secret(value: String, secret: String) -> String:
 	if secret.is_empty():

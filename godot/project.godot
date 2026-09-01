@@ -11,16 +11,18 @@ config/features=PackedStringArray("4.7", "GL Compatibility")
 
 [display/window]
 size/viewport_width=1280
-size/viewport_height=160
+size/viewport_height=300
 size/window_width_override=1280
-size/window_height_override=160
+size/window_height_override=300
 size/resizable=false
 size/borderless=true
-transparent=true
+size/transparent=true
+per_pixel_transparency/allowed=true
 stretch/mode="canvas_items"
 
 [rendering]
 renderer/rendering_method="gl_compatibility"
 renderer/rendering_method.mobile="gl_compatibility"
 textures/default_filters/use_nearest_mipmap_filter=false
+viewport/transparent_background=true
 environment/defaults/default_clear_color=Color(0, 0, 0, 0)

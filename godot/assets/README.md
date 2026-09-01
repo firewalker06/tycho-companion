@@ -1,11 +1,14 @@
-# Tycho Companion generated art
+# Tycho Companion generated-art provenance
 
-These are project-owned generated assets. They are not third-party material and
-carry no implied third-party licence.
+Both raster assets were generated and edited with OpenAI GPT Image during local
+development. The inputs were text prompts and earlier project-generated versions
+of the same artwork; no third-party source images are incorporated. Image
+post-processing removed a flat chroma background and preserved alpha. The files
+contain no embedded prompt, local path, credential, log, or user-data metadata.
 
-| File | Source dimensions | SHA-256 | Generation / integration notes |
+| File | Tracked dimensions | SHA-256 | Generation / integration notes |
 | --- | --- | --- | --- |
-| `coastal-workshop.png` | 1774 × 887, opaque RGB | `37f9eb4be80663bd6fae6d67752d0810576fbc6ab2d0f074bf6d4cea029f1ee4` | Generated from the supplied coastal-workshop prompt. The app draws source region `x=0..1774, y=400..784` into the strip. This deliberate 1774 × 384 crop contains all three lit work bays and fits the compact bottom strip without letterboxing. |
-| `caretaker-poses.png` | 1536 × 1024, RGBA | `04a66973bdc564463df5508543b444de5e0b1e0ce4ebda311be0a9b2bfd7aa98` | Generated from the supplied caretaker sprite-sheet prompt, then made RGBA using the corrected chroma-key edit with the system `remove_chroma_key.py` script. It is exactly 3 columns × 2 rows of 512 × 512 cells: idle top-left, running top-centre, awaiting-input/partial top-right, succeeded bottom-left, failed/blocked bottom-centre, stopped/offline/stale bottom-right. |
+| `coastal-workshop.png` | 2048 × 500, RGBA | `3d8d2f047dd830a45e7e345c0e73d1e77c6aa63d659ccaa1350bd757ff9825b9` | GPT Image edit of the earlier project-generated workshop. The prompt requested a wide coastal pier with three workshops and attached objects, no sky or background, sized for a 2K desktop strip. A flat chroma background was converted to alpha, then the cutout was tightly cropped and scaled to 2048 px. The renderer preserves its aspect ratio. |
+| `caretaker-poses.png` | 1536 × 1024, RGBA | `55b5fa35ab247544d9c1de36d8d5cbc13bedd97ccc17cf329a01d37968db7c82` | GPT Image edit of the earlier project-generated six-pose caretaker atlas. The prompt preserved the exact character, poses, 3 × 2 grid, and 512 px cells while strengthening the black outer silhouette to remain legible at 120 px. Exact magenta pixel filtering converted the flat chroma background to alpha without softening the pixel art. Pose order: idle, running, awaiting-input/partial, succeeded, failed/blocked, and stopped/offline/stale. |
 
-The running pose alone has a subtle two-pixel bob. All other poses remain still.
+Every caretaker pose has state-specific procedural idle motion: breathing for idle, a working bob for running, an alert sway for awaiting input, a proud lift for success, a slow slump for failed/blocked, and restrained motion for partial, stopped, and stale states.
