@@ -1,0 +1,11 @@
+# ADR 0001: Use Godot for the Windows prototype
+
+The research report recommends AppKit plus SpriteKit for the macOS-first product. The user has chosen Godot 4 for this prototype so it can be tested on Windows. This decision overrides the engine recommendation for the current branch, not the report's product, privacy, or state-semantics guidance.
+
+The project uses standard Godot 4.7.2 with GDScript and the Compatibility renderer. It has no add-ons, third-party runtime dependencies, or external art assets. The Windows test ZIP is portable, not an installer or signed Tycho release. Its tracked default scene is synthetic and credential-free. Operators may explicitly configure an allowlisted Tycho origin and Windows-account-protected bearer token; the client then makes only authenticated `GET /servers/activity` and `GET /servers/resources` requests.
+
+Windows credential persistence uses current-user DPAPI and uses the exact configured origin as additional entropy, cryptographically binding each encrypted value to that server identity. The encrypted value lives only in Godot's stable per-user application-data directory, never in this repository. Disconnect is the explicit forget action and reports deletion failures; Save & Quit and native close requests preserve the encrypted token or keep the app open when a new token cannot be secured. `TYCHO_ORIGIN` and `TYCHO_TOKEN` are accepted only as one complete, safe pair and remain transient unless the operator explicitly connects through Settings.
+
+Godot couples `window_set_mouse_passthrough()` to the native paint region on Windows. Restricting that polygon to the control shelf clips the ambient canvas, so this prototype keeps the painted 300 px strip interactive. This is an explicit Windows-prototype exception to the report's zero-click-interception requirement, not the intended product behavior. A native Windows adapter is required before claiming full ambient click-through.
+
+This deliberately defers native macOS details from the report: accessory/menu-bar behavior, public desktop-level placement, Keychain, and AppKit accessibility elements. If Windows testing validates the scene, choose whether to invest in native platform adapters or return to a native macOS host before broadening platform support.
