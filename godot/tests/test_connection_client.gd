@@ -7,6 +7,23 @@ func _init() -> void:
 	# The fixture is deliberately synthetic: no configured or environment token is
 	# ever required for tests, snapshots, or test output.
 	var fixture_token := "test-only-token"
+	for diagnostic_flag in Client.CREDENTIAL_FREE_DIAGNOSTIC_FLAGS:
+		var accesses: Array[String] = []
+		var diagnostic := Client.new()
+		diagnostic._initialize_connection(
+			PackedStringArray([diagnostic_flag]),
+			func() -> void:
+				accesses.append("config")
+				diagnostic.origin = "http://localhost"
+				diagnostic._token = fixture_token,
+			func(key: String) -> String:
+				accesses.append("environment:" + key)
+				return "http://localhost" if key == "TYCHO_ORIGIN" else fixture_token,
+			func() -> void: accesses.append("request"),
+		)
+		assert(accesses.is_empty(), "%s must bypass config, environment, and requests" % diagnostic_flag)
+		assert(not diagnostic.has_live_configuration())
+		diagnostic.free()
 	var headers := Client.authorization_headers(fixture_token)
 	assert(headers.size() == 1)
 	assert(headers[0] == "Authorization: Bearer test-only-token")
@@ -38,6 +55,46 @@ func _init() -> void:
 	assert(passed_report.ok)
 	assert(not passed_report.started)
 	assert(not Client.connection_test_report({"/servers/activity": {"ok": true}}).ok)
+	var raw_activity := {
+		"prompt": "private-prompt-marker",
+		"summary": "private-summary-marker",
+		"servers": [{
+			"key": "synthetic-server",
+			"name": "Synthetic shore",
+			"logs": ["private-log-marker"],
+			"agents": [{
+				"key": "synthetic-agent",
+				"name": "Synthetic caretaker",
+				"project_key": "synthetic-project",
+				"status": "running",
+				"prompt": "nested-prompt-marker",
+				"summary": "nested-summary-marker",
+				"filesystem_path": "private-path-marker",
+				"conversation": "private-conversation-marker",
+				"usage": {"tokens": 999},
+			}],
+		}],
+	}
+	var scene_agents := Client.sanitize_activity(raw_activity)
+	assert(scene_agents.size() == 1)
+	for field in scene_agents[0].keys():
+		assert(Client.SCENE_AGENT_FIELDS.has(field), "unexpected scene field: %s" % field)
+	for field in Client.SCENE_AGENT_FIELDS:
+		assert(scene_agents[0].has(field), "missing scene field: %s" % field)
+	var serialized_scene := JSON.stringify(scene_agents)
+	for private_marker in ["private-prompt-marker", "private-summary-marker", "private-log-marker", "nested-prompt-marker", "nested-summary-marker", "private-path-marker", "private-conversation-marker", "999"]:
+		assert(not serialized_scene.contains(private_marker), "private transport field crossed the scene boundary")
+	var signal_probe := Client.new()
+	var snapshot_signal: Dictionary = {}
+	for signal_info in signal_probe.get_signal_list():
+		if signal_info.name == "snapshot_received":
+			snapshot_signal = signal_info
+			break
+	signal_probe.free()
+	assert(not snapshot_signal.is_empty())
+	assert(snapshot_signal.args.size() == 2, "snapshot signal must omit raw activity and resources bodies")
+	assert(snapshot_signal.args[0].name == "agents")
+	assert(snapshot_signal.args[1].name == "refreshed_at")
 
 	var client := Client.new()
 	assert(client.connection_status() == "setup")

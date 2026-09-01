@@ -48,8 +48,11 @@ func _ready() -> void:
 	get_viewport().size_changed.connect(_on_viewport_size_changed)
 	call_deferred("_update_passthrough")
 	_sync_companion_scene()
-	if OS.get_cmdline_user_args().has("--debug-render-snapshot"):
+	var user_args := OS.get_cmdline_user_args()
+	if user_args.has("--debug-render-snapshot"):
 		call_deferred("_run_cli_render_snapshot")
+	elif user_args.has("--debug-render-check"):
+		call_deferred("_run_cli_render_check")
 
 func _notification(what: int) -> void:
 	if what == NOTIFICATION_WM_CLOSE_REQUEST:
@@ -275,35 +278,43 @@ func _disconnect() -> void:
 	_update_inspect_text()
 
 func _toggle_overlay(kind: String) -> void:
-	overlay_kind = "" if overlay_kind == kind else kind
-	settings_panel.visible = overlay_kind == "settings"
-	inspect_panel.visible = overlay_kind == "inspect"
-	debug_panel.visible = overlay_kind == "debug"
+	_set_overlay_visibility("" if overlay_kind == kind else kind)
 	if overlay_kind == "settings":
 		settings_state.text = "%s\n%s" % [client.connection_message(), client.credential_message()]
 		token_field.placeholder_text = "Saved token active — enter only to replace" if client.has_saved_credential() else "Saved securely after connecting"
 	if overlay_kind == "inspect": _update_inspect_text()
+	_refresh_overlay_layout()
+
+func _set_overlay_visibility(kind: String) -> void:
+	overlay_kind = kind
+	settings_panel.visible = overlay_kind == "settings"
+	inspect_panel.visible = overlay_kind == "inspect"
+	debug_panel.visible = overlay_kind == "debug"
+
+func _refresh_overlay_layout() -> void:
 	_apply_window_layout()
 	call_deferred("_layout_controls")
 	call_deferred("_update_passthrough")
 
 func _hide_overlays() -> void:
 	if overlay_kind.is_empty(): return
-	overlay_kind = ""
-	settings_panel.hide()
-	inspect_panel.hide()
-	debug_panel.hide()
-	_apply_window_layout()
-	call_deferred("_layout_controls")
-	call_deferred("_update_passthrough")
+	_set_overlay_visibility("")
+	_refresh_overlay_layout()
+
+func _show_shutdown_save_error(message: String) -> void:
+	## Explicit assignment makes this idempotent: Settings stays visible whether
+	## it started open or closed, and the latest save error always wins.
+	_set_overlay_visibility("settings")
+	settings_state.text = "Could not save the token, so Tycho Companion remains open.\n%s" % message
+	if is_inside_tree():
+		_refresh_overlay_layout()
 
 func _quit() -> void:
 	if quit_pending:
 		return
 	var save_result: Dictionary = client.prepare_for_shutdown()
 	if not save_result.ok:
-		_toggle_overlay("settings")
-		settings_state.text = "Could not save the token, so Tycho Companion remains open.\n%s" % save_result.message
+		_show_shutdown_save_error(str(save_result.message))
 		return
 	quit_pending = true
 	client.disconnect_live(false)
@@ -320,10 +331,8 @@ func _on_connection_status_changed(status: String, message: String) -> void:
 	_update_inspect_text()
 	_sync_companion_scene()
 
-func _on_snapshot_received(activity: Dictionary, _resources: Dictionary, refreshed_at: String) -> void:
-	agents.clear()
-	for raw in StateMapperScript.flatten_activity(activity):
-		agents.append(StateMapperScript.normalize_agent(raw))
+func _on_snapshot_received(next_agents: Array[Dictionary], refreshed_at: String) -> void:
+	agents = next_agents.duplicate(true)
 	last_refresh = refreshed_at
 	_update_inspect_text()
 	_sync_companion_scene()
@@ -414,6 +423,21 @@ func _run_cli_render_snapshot() -> void:
 		get_tree().quit(0)
 	else:
 		printerr("Debug render snapshot failed with error %d." % last_snapshot_error)
+		get_tree().quit(1)
+
+func _run_cli_render_check() -> void:
+	## Headless-safe credential-free diagnostic used by CI and local export checks.
+	var report := DebugSystemScript.render_test_report(
+		CompanionSceneScript.WORKSHOP.get_size(),
+		CompanionSceneScript.CARETAKER.get_size(),
+		CompanionSceneScript.WORKSHOP_REGION,
+		Vector2i(CompanionSceneScript.CARETAKER_CELL),
+	)
+	if report.ok:
+		print("Credential-free render check passed")
+		get_tree().quit(0)
+	else:
+		printerr(str(report.message))
 		get_tree().quit(1)
 
 func _update_inspect_text() -> void:

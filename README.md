@@ -20,9 +20,10 @@ Open **Debug** to probe both endpoints, switch between live rendering and a dete
 
 ```sh
 godot --path godot -- --debug-render-snapshot
+godot --headless --path godot -- --debug-render-check
 ```
 
-Snapshot capture needs a real rendering driver; Godot's `--headless` dummy renderer intentionally has no viewport texture.
+Both flags bypass saved configuration, environment credentials, and network startup before `ConnectionClient` initializes. Snapshot capture needs a real rendering driver; the headless check validates the synthetic fixture and asset regions without reading a viewport texture.
 
 When a configured connection fails, the strip reports the real retrying state and preserves only the last live scene as stale; it never substitutes demo activity. Disconnect clears both the in-memory and saved token and returns to the empty shoreline. Failed attempts back off exponentially from 2 seconds with a cap; after attempt 3 the client enters explicit offline state until manually reconnected. Stale request completions are discarded after a reconnect or disconnect.
 
@@ -33,7 +34,7 @@ The Windows attachment is an unsigned x86_64 test build. Extract it and run `Tyc
 - Project-owned 2048 px transparent coastal-workshop cutout and caretaker atlas on an explicit ambient CanvasLayer. The workshop keeps its aspect ratio and contains only the pier, three work bays, and their objects. Every caretaker lifecycle pose has restrained state-specific idle motion.
 - Calm state semantics for idle, running, awaiting input, blocked, success, failure, partial, stopped, unread, and stale/offline.
 - Borderless, transparent, bottom-edge window with Settings, Inspect, Debug, and **Save & Quit** controls. Save & Quit and the native window-close request synchronously preserve the protected token before exiting; if that save fails, the app remains open and reports the error. `I` toggles Inspect and `Esc` closes overlays. The 2048 px art is rendered into a 300 px bottom strip; Settings (528 px), Inspect (578 px), or Debug (578 px) add an above-strip panel while the native bottom edge remains fixed, then close back to 300 px.
-- Debug tools probe both read-only Tycho endpoints without changing live polling, validate and preview all lifecycle poses with synthetic data, and save clean compact PNG snapshots under the platform-specific `user://snapshots` directory. Debug reports never include tokens or response bodies.
+- Debug tools probe both read-only Tycho endpoints without changing live polling, validate and preview all lifecycle poses with synthetic data, and save clean compact PNG snapshots under the platform-specific `user://snapshots` directory. Raw activity and resources bodies stay inside the transport; the scene signal carries only sanitized lifecycle/display fields and a refresh time. Debug reports never include tokens or response bodies.
 - On Windows, Godot uses the mouse-passthrough polygon as the native paint region. The app therefore includes the whole painted strip in that region so the workshop remains visible; the 300 px strip and an open overlay intercept clicks. Other platforms keep the narrower control-only input region. True cross-process click-through on Windows requires native window integration that this dependency-free prototype does not include.
 - Windows behavior is a test target, not a promise of full macOS desktop-level or menu-bar parity. Native macOS lifecycle and Keychain integration are deferred.
 
@@ -43,4 +44,4 @@ Asset provenance, tracked dimensions, atlas layout, processing notes, and hashes
 
 ## Verification
 
-Verification covers a normal runtime launch, source and caretaker-atlas inspection, all six deterministic headless suites, a Godot 4.7.2 Windows export, ZIP integrity, privacy/debug-marker scans, and `git diff --check`. The built-in snapshot tool captures the Godot viewport directly, avoiding desktop-layer screenshot ambiguity.
+Verification covers a normal runtime launch, source and caretaker-atlas inspection, all deterministic headless suites, the credential-free diagnostic, a Godot 4.7.2 Windows export, ZIP integrity, privacy/debug-marker scans, and `git diff --check`. The built-in snapshot tool captures the Godot viewport directly, avoiding desktop-layer screenshot ambiguity.

@@ -9,7 +9,7 @@ const CredentialStoreScript := preload("res://credential_store.gd")
 ## excluded from signals, snapshots, config files, and errors.
 
 signal status_changed(status: String, message: String)
-signal snapshot_received(activity: Dictionary, resources: Dictionary, refreshed_at: String)
+signal snapshot_received(agents: Array[Dictionary], refreshed_at: String)
 signal connection_test_completed(report: Dictionary)
 
 const SETTINGS_PATH := "user://tycho-companion.cfg"
@@ -17,6 +17,8 @@ const MAX_RETRIES := 3
 const BASE_BACKOFF_SECONDS := 2.0
 const MAX_BACKOFF_SECONDS := 30.0
 const POLL_SECONDS := 15.0
+const CREDENTIAL_FREE_DIAGNOSTIC_FLAGS := ["--debug-render-snapshot", "--debug-render-check"]
+const SCENE_AGENT_FIELDS := ["server", "project", "agent", "state", "unread", "awaiting_input", "blocked", "stale"]
 
 var origin := ""
 var _token := ""
@@ -30,7 +32,6 @@ var _retry_count := 0
 var _next_refresh_at := 0
 var _pending := 0
 var _activity: Dictionary = {}
-var _resources: Dictionary = {}
 var _connection_test_generation := 0
 var _connection_test_pending := 0
 var _connection_test_results: Dictionary = {}
@@ -41,10 +42,31 @@ var credential_protect: Callable = CredentialStoreScript.protect
 var credential_unprotect: Callable = CredentialStoreScript.unprotect
 
 func _ready() -> void:
-	_load_configuration()
-	_apply_environment_configuration(OS.get_environment("TYCHO_ORIGIN"), OS.get_environment("TYCHO_TOKEN"))
+	_initialize_connection(OS.get_cmdline_user_args())
+
+func _initialize_connection(user_args: PackedStringArray, configuration_loader: Callable = Callable(), environment_reader: Callable = Callable(), connection_starter: Callable = Callable()) -> void:
+	## This gate must run before any config or environment access. Credential-free
+	## diagnostics therefore cannot decrypt a saved token or start HTTP requests.
+	if is_credential_free_diagnostic(user_args):
+		return
+	if configuration_loader.is_valid():
+		configuration_loader.call()
+	else:
+		_load_configuration()
+	var env_origin := str(environment_reader.call("TYCHO_ORIGIN")) if environment_reader.is_valid() else OS.get_environment("TYCHO_ORIGIN")
+	var env_token := str(environment_reader.call("TYCHO_TOKEN")) if environment_reader.is_valid() else OS.get_environment("TYCHO_TOKEN")
+	_apply_environment_configuration(env_origin, env_token)
 	if not origin.is_empty() and not _token.is_empty():
-		_start_live_connection()
+		if connection_starter.is_valid():
+			connection_starter.call()
+		else:
+			_start_live_connection()
+
+static func is_credential_free_diagnostic(user_args: PackedStringArray) -> bool:
+	for flag in CREDENTIAL_FREE_DIAGNOSTIC_FLAGS:
+		if user_args.has(flag):
+			return true
+	return false
 
 func _apply_environment_configuration(env_origin: String, env_token: String) -> void:
 	var clean_env_origin := env_origin.strip_edges()
@@ -121,7 +143,6 @@ func disconnect_live(forget_saved: bool = true) -> Dictionary:
 	_retry_count = 0
 	_pending = 0
 	_activity = {}
-	_resources = {}
 	var forget_result := {"ok": true, "message": "Saved token preserved."}
 	if forget_saved:
 		forget_result = _forget_saved_token()
@@ -211,7 +232,6 @@ static func connection_test_report(results: Dictionary) -> Dictionary:
 func _refresh_generation(generation: int) -> void:
 	_pending = 2
 	_activity = {}
-	_resources = {}
 	_set_status("connecting", "Refreshing Tycho")
 	_request("/servers/activity", generation, true)
 	_request("/servers/resources", generation, false)
@@ -238,14 +258,26 @@ func _on_request_completed(result: int, response_code: int, _headers: PackedStri
 		return
 	if is_activity:
 		_activity = json.data
-	else:
-		_resources = json.data
 	_pending -= 1
 	if _pending == 0:
+		var scene_agents := sanitize_activity(_activity)
+		_activity = {}
 		_retry_count = 0
 		_next_refresh_at = Time.get_ticks_msec() + int(POLL_SECONDS * 1000.0)
 		_set_status("connected", "Live Tycho data")
-		snapshot_received.emit(_activity, _resources, Time.get_datetime_string_from_system())
+		snapshot_received.emit(scene_agents, Time.get_datetime_string_from_system())
+
+static func sanitize_activity(activity: Dictionary) -> Array[Dictionary]:
+	## Raw transport payloads stop here. Only the lifecycle and display fields
+	## needed by the scene cross the signal boundary.
+	var agents: Array[Dictionary] = []
+	for raw in StateMapperScript.flatten_activity(activity):
+		var normalized := StateMapperScript.normalize_agent(raw)
+		var scene_agent := {}
+		for field in SCENE_AGENT_FIELDS:
+			scene_agent[field] = normalized[field]
+		agents.append(scene_agent)
+	return agents
 
 func _connection_failed(reason: String) -> void:
 	_generation += 1
