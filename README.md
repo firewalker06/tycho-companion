@@ -40,6 +40,8 @@ The Windows attachment is an unsigned x86_64 test build. Extract it and run `Tyc
 
 See [the research report](docs/research/desktop-diorama-visualizer.md) for the architecture rationale. This is not an App Store-ready release or a complete MVP.
 
+The standalone [OpenPets comparison prototype](openpets/README.md) is a separate experiment. It does not replace or modify this Godot baseline.
+
 Asset provenance, tracked dimensions, atlas layout, processing notes, and hashes are in [godot/assets/README.md](godot/assets/README.md).
 
 ## Verification

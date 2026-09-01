@@ -1,0 +1,8 @@
+{
+  "plugin.name": "Tycho Companion prototype",
+  "plugin.description": "Shows sanitized Tycho lifecycle state through up to five OpenPets pets.",
+  "config.petPackageIds.label": "Spawned pet package IDs",
+  "config.petPackageIds.description": "Comma-separated installed pet package IDs. Repeat one ID for a uniform group or list distinct IDs for visual separation.",
+  "command.refresh.title": "Refresh Tycho state",
+  "command.refresh.description": "Read the loopback adapter now."
+}

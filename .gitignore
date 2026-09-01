@@ -2,3 +2,4 @@
 .DS_Store
 .godot/
 dist/
+node_modules/
